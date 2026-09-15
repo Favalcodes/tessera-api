@@ -37,11 +37,11 @@ write an unbalanced transaction, edit a historical posting, or drive a wallet ne
 | 0 | Repo, database, CI, health checks | **Done** |
 | 1 | Double-entry ledger, auth, invariant tests | **Done** |
 | 2 | Round engine, atomic betting, cash-out, load tests | **Done** |
-| 3 | WebSocket layer, live UI | Next |
-| 4 | Hash-chain provable fairness, admin dashboard | Not started |
+| 3 | WebSocket layer, live UI | **API done**, web in progress |
+| 4 | Hash-chain provable fairness, admin dashboard | Next |
 | 5 | Docs, demo, deploy | Not started |
 
-63 tests passing, plus an HTTP load harness.
+77 tests passing, plus HTTP load and latency harnesses.
 
 ---
 
@@ -87,6 +87,7 @@ and still corrupt the ledger doing it.
 | 200 concurrent requests sharing one idempotency key | **1 bet created**, all 200 answered, debited exactly once |
 | 100 concurrent cash-outs on one bet | **1 payout**, credited exactly once |
 | Ledger after all of the above | global posting sum **0**, drifting accounts **0** |
+| Resolve → client broadcast, 50 viewers, 150 broadcasts | p50 **5ms**, p95 **8ms**, max 8ms |
 
 Latency under that load (p50 / p95, milliseconds): over-spend 241 / 260, idempotency
 91 / 116, cash-out 104 / 106. These are contention figures, not throughput figures —
@@ -222,6 +223,39 @@ The seed is revealed on a void as well. Voiding is the only power the operator h
 make a round not count, so an operator able to void silently could dodge expensive
 payouts by voiding whenever the drawn outcome was costly. Revealing makes every void
 auditable against the outcome it discarded.
+
+### Live state
+
+A Socket.IO gateway on `/live` is the only place in the codebase that knows a WebSocket
+exists. The engine and the betting service publish domain events with no knowledge of it,
+which is why all of Phase 2 is tested without a socket client anywhere near it.
+
+**Fan-out is over Postgres `LISTEN`/`NOTIFY`, not Redis.** The engine runs on one leader,
+but every instance has clients connected to it, so local events are not enough — a
+follower would broadcast nothing. Using the database already in the stack means one fewer
+service to run, deploy, secure and explain, which is the PRD's own warning about adding
+infrastructure for its own sake.
+
+The property that makes it more than a shortcut: `pg_notify` is **transactional**. A
+notification queued inside a transaction is delivered only if that transaction commits, so
+publishing an event alongside the write it describes is atomic. No client is ever told
+about a bet that rolled back — no outbox table, no reconciliation. What it is not is
+durable, which is why every reconnect resyncs against full round state rather than
+replaying a backlog.
+
+**Clients compute the climbing multiplier themselves** from the round's `startedAt`. The
+server broadcasts lifecycle transitions plus one low-frequency sync every two seconds.
+Pushing the number at 60fps to every viewer is the obvious implementation and the wrong
+one: it is O(viewers × framerate) messages for information the client already has what it
+needs to derive. Every payload carries `serverTime`, and a `ping` round-trip lets a client
+correct for a skewed local clock — otherwise a machine thirty seconds fast renders a
+wildly wrong multiplier and looks identical to a slow connection.
+
+Watching is public; a visitor sees the game without an account. A token only adds the
+personal room, where balance and settlement events go. **Nothing that moves money travels
+over the socket** — bets and cash-outs stay on HTTP, because they need idempotency keys,
+precise status codes and retry semantics, and a dropped socket leaves a client unable to
+tell whether its bet landed.
 
 ### Fairness today
 

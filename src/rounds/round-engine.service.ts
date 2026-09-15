@@ -14,6 +14,8 @@ import { DatabaseService } from '../database/database.service';
 import { SYSTEM_ACCOUNTS, type DB } from '../database/database.types';
 import { LedgerService } from '../ledger/ledger.service';
 import { TransactionKind } from '../ledger/ledger.types';
+import { RoundEventBusService } from './events/round-event-bus.service';
+import { toBetView } from './bet-view.mapper';
 import { FAIRNESS_PROVIDER, type FairnessProvider } from './fairness/fairness.provider';
 import { LeaderElectionService } from './leader-election.service';
 
@@ -39,6 +41,7 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
     private readonly database: DatabaseService,
     private readonly ledger: LedgerService,
     private readonly leader: LeaderElectionService,
+    private readonly events: RoundEventBusService,
     private readonly config: ConfigService<Env, true>,
     @Inject(FAIRNESS_PROVIDER) private readonly fairness: FairnessProvider,
   ) {}
@@ -194,6 +197,7 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
         .returning(['id', 'nonce'])
         .executeTakeFirstOrThrow();
 
+      await this.events.publish({ type: 'round.state', roundId: round.id });
       this.logger.log(`Round ${round.nonce} open for ${bettingWindow}ms`);
       return round.id;
     } catch (error) {
@@ -216,21 +220,35 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
   }
 
   async lockRound(roundId: string): Promise<void> {
-    await this.db
-      .updateTable('rounds')
-      .set({ status: 'LOCKED' })
-      .where('id', '=', roundId)
-      .where('status', '=', 'OPEN')
-      .execute();
+    await this.db.transaction().execute(async (trx) => {
+      const changed = await trx
+        .updateTable('rounds')
+        .set({ status: 'LOCKED' })
+        .where('id', '=', roundId)
+        .where('status', '=', 'OPEN')
+        .executeTakeFirst();
+
+      // Publishing inside the transaction keeps the event and the state change
+      // atomic; guarding on the row count keeps a no-op tick from broadcasting.
+      if (changed.numUpdatedRows === 1n) {
+        await this.events.publish({ type: 'round.state', roundId }, trx);
+      }
+    });
   }
 
   async startRound(roundId: string): Promise<void> {
-    await this.db
-      .updateTable('rounds')
-      .set({ status: 'FLYING', started_at: sql<Date>`clock_timestamp()` })
-      .where('id', '=', roundId)
-      .where('status', '=', 'LOCKED')
-      .execute();
+    await this.db.transaction().execute(async (trx) => {
+      const changed = await trx
+        .updateTable('rounds')
+        .set({ status: 'FLYING', started_at: sql<Date>`clock_timestamp()` })
+        .where('id', '=', roundId)
+        .where('status', '=', 'LOCKED')
+        .executeTakeFirst();
+
+      if (changed.numUpdatedRows === 1n) {
+        await this.events.publish({ type: 'round.state', roundId }, trx);
+      }
+    });
   }
 
   /**
@@ -247,18 +265,24 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
       .where('id', '=', roundId)
       .executeTakeFirstOrThrow();
 
-    await this.db
-      .updateTable('rounds')
-      .set({
-        status: 'CRASHED',
-        crashed_at: sql<Date>`clock_timestamp()`,
-        // The reveal. Copying the committed seed across is what a player checks
-        // against the hash published before they bet.
-        seed_revealed: round.seed,
-      })
-      .where('id', '=', roundId)
-      .where('status', '=', 'FLYING')
-      .execute();
+    await this.db.transaction().execute(async (trx) => {
+      const changed = await trx
+        .updateTable('rounds')
+        .set({
+          status: 'CRASHED',
+          crashed_at: sql<Date>`clock_timestamp()`,
+          // The reveal. Copying the committed seed across is what a player checks
+          // against the hash published before they bet.
+          seed_revealed: round.seed,
+        })
+        .where('id', '=', roundId)
+        .where('status', '=', 'FLYING')
+        .executeTakeFirst();
+
+      if (changed.numUpdatedRows === 1n) {
+        await this.events.publish({ type: 'round.state', roundId }, trx);
+      }
+    });
 
     this.logger.log(
       `Round ${round.nonce} crashed at ${(round.crash_point_bp / 10_000).toFixed(2)}x`,
@@ -305,6 +329,7 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
         .where('status', '=', 'CRASHED')
         .execute();
 
+      await this.events.publish({ type: 'round.state', roundId }, trx);
       this.logger.log(`Round ${round.nonce} settled (${activeBets.length} lost)`);
     });
   }
@@ -356,6 +381,7 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
         .where('id', '=', roundId)
         .execute();
 
+      await this.events.publish({ type: 'round.state', roundId }, trx);
       this.logger.warn(
         `Round ${round.nonce} voided (${reason}); refunded ${activeBets.length} stake(s)`,
       );
@@ -394,6 +420,32 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
       },
       trx,
     );
+
+    await this.publishBetOutcome(trx, bet.id, bet.user_id, walletId);
+  }
+
+  /**
+   * Tell one player what happened to their bet, and what their balance is now.
+   *
+   * Sent on the same transaction as the settlement, so a client cannot be told
+   * about a payout that then rolls back.
+   */
+  private async publishBetOutcome(
+    trx: Transaction<DB>,
+    betId: string,
+    userId: string,
+    walletId: string,
+  ): Promise<void> {
+    const row = await trx
+      .selectFrom('bets')
+      .selectAll()
+      .where('id', '=', betId)
+      .executeTakeFirstOrThrow();
+
+    const balance = await this.ledger.getBalance(walletId, trx);
+
+    await this.events.publish({ type: 'bet.settled', userId, bet: toBetView(row) }, trx);
+    await this.events.publish({ type: 'wallet.updated', userId, balanceMinor: balance }, trx);
   }
 
   private async settleLostBet(
@@ -420,6 +472,9 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
       },
       trx,
     );
+
+    const walletId = await this.ledger.getWalletAccountId(bet.user_id, trx);
+    await this.publishBetOutcome(trx, bet.id, bet.user_id, walletId);
   }
 }
 

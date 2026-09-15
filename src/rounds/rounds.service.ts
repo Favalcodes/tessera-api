@@ -10,9 +10,11 @@ import { sql, type Transaction } from 'kysely';
 import { BasisPoints, Money } from '../common/value-objects/money';
 import type { Env } from '../config/env.validation';
 import { DatabaseService } from '../database/database.service';
-import { SYSTEM_ACCOUNTS, type BetStatusDb, type DB } from '../database/database.types';
+import { SYSTEM_ACCOUNTS, type DB } from '../database/database.types';
 import { LedgerService } from '../ledger/ledger.service';
-import { TransactionKind } from '../ledger/ledger.types';
+import { TransactionKind, type Executor } from '../ledger/ledger.types';
+import { toBetView, type BetRow } from './bet-view.mapper';
+import { RoundEventBusService } from './events/round-event-bus.service';
 import {
   BetAlreadySettledError,
   CashOutTooLateError,
@@ -37,16 +39,6 @@ type RoundRow = {
   crashed_at: Date | null;
 };
 
-type BetRow = {
-  id: string;
-  round_id: string;
-  stake_minor: number;
-  status: BetStatusDb;
-  cashout_multiplier_bp: number | null;
-  payout_minor: number | null;
-  created_at: Date;
-};
-
 /**
  * Betting on a round: the two concurrency-critical write paths.
  *
@@ -60,6 +52,7 @@ export class RoundsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly ledger: LedgerService,
+    private readonly events: RoundEventBusService,
     private readonly config: ConfigService<Env, true>,
   ) {}
 
@@ -103,7 +96,7 @@ export class RoundsService {
       .orderBy('created_at', 'asc')
       .execute();
 
-    return rows.map((r) => this.toBetView(r));
+    return rows.map((r) => toBetView(r));
   }
 
   async getUserBets(userId: string, limit = 50): Promise<BetView[]> {
@@ -115,7 +108,7 @@ export class RoundsService {
       .limit(Math.min(Math.max(limit, 1), 200))
       .execute();
 
-    return rows.map((r) => this.toBetView(r));
+    return rows.map((r) => toBetView(r));
   }
 
   // ---------------------------------------------------------------------------
@@ -156,7 +149,7 @@ export class RoundsService {
         // client that retried because it never saw the response has to be able
         // to converge on what actually happened.
         const replay = await this.findByIdempotencyKey(trx, input.userId, input.idempotencyKey);
-        if (replay) return this.toBetView(replay);
+        if (replay) return toBetView(replay);
 
         // FOR SHARE, not FOR UPDATE.
         //
@@ -208,7 +201,25 @@ export class RoundsService {
           trx,
         );
 
-        return this.toBetView(bet);
+        const displayName = await this.displayNameOf(input.userId, trx);
+        const balance = await this.ledger.getBalance(walletId, trx);
+
+        await this.events.publish(
+          {
+            type: 'bet.placed',
+            roundId: input.roundId,
+            betId: bet.id,
+            displayName,
+            stakeMinor: bet.stake_minor,
+          },
+          trx,
+        );
+        await this.events.publish(
+          { type: 'wallet.updated', userId: input.userId, balanceMinor: balance },
+          trx,
+        );
+
+        return toBetView(bet);
       });
     } catch (error) {
       // Two requests carrying the same idempotency key can both miss the replay
@@ -220,7 +231,7 @@ export class RoundsService {
           input.userId,
           input.idempotencyKey,
         );
-        if (existing) return this.toBetView(existing);
+        if (existing) return toBetView(existing);
       }
 
       throw error;
@@ -261,7 +272,7 @@ export class RoundsService {
 
       // Idempotent: cashing out twice returns the first result rather than
       // erroring, so a retried request converges.
-      if (bet.status === 'CASHED_OUT') return this.toBetView(bet);
+      if (bet.status === 'CASHED_OUT') return toBetView(bet);
       if (bet.status !== 'ACTIVE') throw new BetAlreadySettledError(bet.status);
 
       const round = await trx
@@ -331,17 +342,53 @@ export class RoundsService {
         trx,
       );
 
+      const walletId = postings[1]!.accountId;
+      const displayName = await this.displayNameOf(input.userId, trx);
+      const balance = await this.ledger.getBalance(walletId, trx);
+
+      await this.events.publish(
+        {
+          type: 'bet.cashed_out',
+          roundId: bet.round_id,
+          betId: bet.id,
+          displayName,
+          stakeMinor: bet.stake_minor,
+          cashoutMultiplierBp: multiplierBp,
+          payoutMinor: payout,
+        },
+        trx,
+      );
+      await this.events.publish(
+        { type: 'wallet.updated', userId: input.userId, balanceMinor: balance },
+        trx,
+      );
+      await this.events.publish(
+        { type: 'bet.settled', userId: input.userId, bet: toBetView(updated) },
+        trx,
+      );
+
       this.logger.debug(
         `cashed out bet=${bet.id} at ${(multiplierBp / 10_000).toFixed(2)}x payout=${payout}`,
       );
 
-      return this.toBetView(updated);
+      return toBetView(updated);
     });
   }
 
   // ---------------------------------------------------------------------------
   // Mapping
   // ---------------------------------------------------------------------------
+
+  /** Public feed shows who bet, never their id or balance. */
+  private async displayNameOf(userId: string, executor: Executor): Promise<string> {
+    const row = await executor
+      .selectFrom('users')
+      .select(['display_name'])
+      .where('id', '=', userId)
+      .executeTakeFirst();
+
+    return row?.display_name ?? 'Player';
+  }
 
   private async findByIdempotencyKey(
     executor: Transaction<DB> | typeof this.db,
@@ -376,22 +423,6 @@ export class RoundsService {
       startedAt: row.started_at?.toISOString() ?? null,
       crashedAt: row.crashed_at?.toISOString() ?? null,
       serverTime: new Date().toISOString(),
-    };
-  }
-
-  toBetView(row: BetRow): BetView {
-    const payout = row.payout_minor === null ? null : Money.fromMinor(row.payout_minor);
-
-    return {
-      id: row.id,
-      roundId: row.round_id,
-      stakeMinor: row.stake_minor,
-      stake: Money.format(Money.fromMinor(row.stake_minor)),
-      status: row.status,
-      cashoutMultiplierBp: row.cashout_multiplier_bp,
-      payoutMinor: payout,
-      payout: payout === null ? null : Money.format(payout),
-      createdAt: row.created_at.toISOString(),
     };
   }
 }
