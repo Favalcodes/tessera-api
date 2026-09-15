@@ -17,10 +17,12 @@ Three claims, each enforced rather than asserted:
 1. **Credits cannot be created or destroyed.** Every balance change is a double-entry
    transaction whose postings sum to zero, checked by a deferred constraint trigger in
    Postgres at commit. A balance is never written directly.
-2. **Concurrent bets cannot over-spend an account.** Row-level locking makes
-   check-then-debit atomic. *(Phase 2 — in progress.)*
+2. **Concurrent bets cannot over-spend an account.** Measured: 200 simultaneous
+   bets against an account with funds for 10 — exactly 10 succeed, 190 are refused
+   cleanly, zero server errors, and the wallet lands on exactly zero.
 3. **Outcomes are fixed before any bet is placed, and anyone can verify it.**
-   *(Phase 4 — not started.)*
+   The crash point is drawn and stored when a round opens and is withheld from every
+   API response until it crashes. *(The hash-chain commitment is Phase 4.)*
 
 The interesting part is that these are database guarantees, not application conventions.
 If every line of application code were deleted, a raw `psql` session still could not
@@ -34,12 +36,12 @@ write an unbalanced transaction, edit a historical posting, or drive a wallet ne
 |---|---|---|
 | 0 | Repo, database, CI, health checks | **Done** |
 | 1 | Double-entry ledger, auth, invariant tests | **Done** |
-| 2 | Round engine, atomic betting, cash-out, load tests | Next |
-| 3 | WebSocket layer, live UI | Not started |
+| 2 | Round engine, atomic betting, cash-out, load tests | **Done** |
+| 3 | WebSocket layer, live UI | Next |
 | 4 | Hash-chain provable fairness, admin dashboard | Not started |
 | 5 | Docs, demo, deploy | Not started |
 
-42 tests passing.
+63 tests passing, plus an HTTP load harness.
 
 ---
 
@@ -68,6 +70,54 @@ at `/Library/PostgreSQL/17/bin`.
 | `pnpm db:psql` | Open a shell on the dev database |
 | `pnpm db:reset` | Destroy, recreate and re-migrate |
 | `pnpm typecheck` / `lint` / `test` / `build` | What CI runs |
+
+---
+
+## The proof points
+
+Run against a live API with `node loadtest/run.mjs`; the raw artefact is written to
+`loadtest/results/latest.json`. Every scenario finishes by asserting the ledger still
+balances — "no over-spends" is a weak claim without "and the books reconcile
+afterwards", since an implementation could refuse exactly the right number of requests
+and still corrupt the ledger doing it.
+
+| Scenario | Result |
+|---|---|
+| 200 concurrent bets, account funded for 10 | **10 accepted, 190 refused with 409, 0 server errors**, final balance exactly 0 |
+| 200 concurrent requests sharing one idempotency key | **1 bet created**, all 200 answered, debited exactly once |
+| 100 concurrent cash-outs on one bet | **1 payout**, credited exactly once |
+| Ledger after all of the above | global posting sum **0**, drifting accounts **0** |
+
+Latency under that load (p50 / p95, milliseconds): over-spend 241 / 260, idempotency
+91 / 116, cash-out 104 / 106. These are contention figures, not throughput figures —
+every request in the first scenario is queuing for the same wallet row by design.
+
+### What the row lock actually buys
+
+Worth stating precisely, because it is easy to over-claim. `SELECT ... FOR UPDATE` on
+the wallet is **not** the only thing preventing an over-spend — the non-negative balance
+trigger is the real last line of defence, and the final balance is correct with or
+without the lock. What the lock changes is the failure mode. Measured at 40 concurrent
+bets against an account with funds for 10:
+
+| | succeed | refused cleanly | constraint violations |
+|---|---|---|---|
+| with `FOR UPDATE` | 10 | 30 | **0** |
+| without | 10 | 2 | **28** |
+
+Those 28 read a stale balance, did the work, and were caught by the database at the last
+moment — reaching the client as a 500 rather than a 409. Defence in depth, with each
+layer doing a different job. There is a test that fails if the lock is removed.
+
+Two bugs surfaced from trying to make that test fail rather than pass:
+
+- Bet placement locked the **round** row `FOR UPDATE`, which serialised every bet on a
+  round and meant nothing ever reached the wallet lock concurrently — the guarantee was
+  untested and the throughput ceiling was one bet at a time. It is `FOR SHARE` now: bets
+  run in parallel and still block the engine's exclusive lock when betting closes.
+- A one-bet-per-user-per-round unique index made the headline scenario meaningless,
+  since N simultaneous bets would collapse to one success because of the index rather
+  than the balance check.
 
 ---
 
@@ -125,6 +175,58 @@ account now gets its balances row by trigger at creation, which makes posting a 
 
 ---
 
+## The game
+
+One crash round at a time, driven by a leader-elected engine:
+
+```
+ OPEN ──20s──▶ LOCKED ──▶ FLYING ──▶ CRASHED ──▶ SETTLED ──▶ (next round)
+  │                          │
+  │ place a bet              │ cash out
+  └── allowed                └── allowed
+```
+
+The multiplier climbs on a fixed curve — 2.01x at 7s, 4.45x at 15s, 19.79x at 30s,
+capped at 997.78x. The curve lives in `@tessera/contracts` and is **integer-only**:
+`Math.exp` and `Math.pow` are not guaranteed bit-identical across JavaScript engines, and
+a client whose curve disagreed by a rounding step would show a player a number the server
+will not pay. The closed form is exact BigInt arithmetic with a single floor, so every
+engine agrees by construction.
+
+**The client never sends a multiplier.** `POST /rounds/bets/:id/cashout` takes an
+idempotency key and nothing else. The server derives the multiplier from the database
+clock and the round's own `started_at`, and compares it against the crash point
+*directly* rather than trusting `rounds.status` — if the engine has not yet ticked the
+round to CRASHED, the row still says FLYING, and paying out on that basis would pay for a
+multiplier that never existed. There is a test for exactly that case.
+
+The engine holds a Postgres advisory lock, so only one process advances rounds. Two
+replicas each running a scheduler would open duplicate rounds and settle bets twice — a
+bug that never appears in single-instance development. It is also a correctness property
+of the engine, decided independently of how any deployment happens to run it; a partial
+unique index refuses a second live round regardless.
+
+The engine has **no transport dependencies** — it does not import a gateway or know what
+a WebSocket is. Phase 3 subscribes to it rather than changing it.
+
+### Fairness today
+
+A round draws a random seed when it opens, publishes `sha256(seed)`, and reveals the seed
+once it crashes. Both the crash point and the seed are withheld from every API response
+until then, and a database constraint refuses a revealed seed on a round that has not
+crashed — so the ordering is enforced, not merely intended.
+
+The honest limitation, which is why Phase 4 exists: this proves the server did not change
+its mind *after* seeing the bets, but not that it did not draw many seeds and publish a
+favourable one beforehand. A pre-committed hash chain closes that gap.
+
+The house edge is ~1.4% — a 1-in-101 instant bust, plus the draw's own mass at 1.00x and
+two-decimal truncation. Measured over 200,000 rounds, a player cashing out at any fixed
+multiplier returns ~98.6% of stake. It is published as a constant because a hidden edge is
+precisely what provable fairness exists to rule out.
+
+---
+
 ## Auth
 
 Email + password (argon2id, OWASP baseline parameters), access JWT plus refresh token
@@ -163,6 +265,11 @@ live. The bet path would not change.
 | `POST` | `/auth/logout` | Revokes the token family |
 | `GET` | `/me/balance` | Derived from the ledger |
 | `GET` | `/me/ledger` | Keyset-paginated posting history |
+| `GET` | `/rounds/current` | The round accepting bets or in flight |
+| `GET` | `/rounds/:id` | One round, with its reveal once crashed |
+| `GET` | `/rounds/:id/bets` | Your bets on that round |
+| `POST` | `/rounds/:id/bets` | Place a bet (stake + idempotency key) |
+| `POST` | `/rounds/bets/:betId/cashout` | Cash out — **no multiplier accepted** |
 | `GET` | `/me` | The authenticated account |
 | `GET` | `/health` · `/health/ready` · `/health/ledger` | Liveness, readiness, integrity |
 
