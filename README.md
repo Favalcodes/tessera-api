@@ -39,7 +39,7 @@ write an unbalanced transaction, edit a historical posting, or drive a wallet ne
 | 4 | Hash-chain provable fairness, admin dashboard | Not started |
 | 5 | Docs, demo, deploy | Not started |
 
-41 tests passing. See [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/TODO.md](docs/TODO.md).
+42 tests passing.
 
 ---
 
@@ -227,9 +227,23 @@ player a number the server will not pay.
 
 ## Decisions
 
-Seven ADRs in [docs/DECISIONS.md](docs/DECISIONS.md) cover the choices and their costs:
-the name, the crash game, owning the WebSocket layer rather than using Supabase, separate
-repos, full double-entry, server-derived multipliers, and leader-elected round scheduling.
+**Why a crash-style game.** It is the only candidate with two concurrency-critical write
+paths rather than one. Bet placement is the path every such project shows; cash-out is the
+harder one, because it races the round resolver — a double cash-out or a cash-out landing
+after the crash is a real correctness bug a naive implementation will have.
+
+**Why own the WebSocket layer.** "A managed service pushed it to the client" is a thin
+answer. Fanning out from a single authoritative round engine, having clients interpolate
+the multiplier locally from a broadcast timestamp, and resyncing reconnects against round
+state rather than replaying missed ticks — that is the part worth being able to explain.
+
+**Why full double-entry rather than signed single-entry.** A `type` column with a sign
+lets credits be created from nothing with nothing to detect it. Real double-entry gives a
+global invariant — every posting in the system sums to zero — checkable in one query.
+
+**Why the server derives the multiplier.** A client-supplied multiplier is a request to be
+paid an arbitrary amount. Deriving it from the server's own clock also means a lagging
+client cannot be paid for a cash-out that arrived after the crash.
 
 **Why Kysely and hand-written SQL rather than Prisma.** The constraints above are the
 product. Prisma's schema language cannot express a deferred constraint trigger, an

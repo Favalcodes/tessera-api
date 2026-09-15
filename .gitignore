@@ -1,3 +1,6 @@
+# Internal planning documents (PRD, roadmap, ADRs, TODO) — not published.
+docs/
+
 node_modules/
 dist/
 coverage/
