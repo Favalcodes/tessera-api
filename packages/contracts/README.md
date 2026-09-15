@@ -12,7 +12,7 @@ sides re-type each other's shapes by hand and nothing detects a drift until runt
 git, so there is no registry and no publish step:
 
 ```bash
-pnpm add "github:<owner>/tessera-api#path:/packages/contracts"
+pnpm add "github:Favalcodes/tessera-api#path:/packages/contracts"
 ```
 
 Pin to a tag or commit for anything deployed; a bare branch reference silently moves.

@@ -211,7 +211,7 @@ The API consumes it through a pnpm workspace. `tessera-web` installs it from git
 registry, no publish step:
 
 ```bash
-pnpm add "github:<owner>/tessera-api#path:/packages/contracts"
+pnpm add "github:Favalcodes/tessera-api#path:/packages/contracts"
 ```
 
 The package is deliberately dependency-free and framework-free. pnpm runs its `prepare`
