@@ -2,8 +2,10 @@ import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService, type AuthResult } from './auth.service';
-import { Public } from './decorators/public.decorator';
-import { LoginDto, RefreshDto, RegisterDto } from './dto/auth.dto';
+import { Public } from '../common/decorators/public.decorator';
+import { LoginDto } from './dto/login.dto';
+import { RefreshDto } from './dto/refresh.dto';
+import { RegisterDto } from './dto/register.dto';
 
 @ApiTags('auth')
 @Controller('auth')

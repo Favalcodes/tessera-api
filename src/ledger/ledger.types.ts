@@ -1,6 +1,6 @@
 import type { Kysely, Transaction } from 'kysely';
-import type { Money } from '../common/money';
-import type { DB } from '../database/schema';
+import type { Money } from '../common/value-objects/money';
+import type { DB } from '../database/database.types';
 
 /** Either a pooled connection or an open transaction. */
 export type Executor = Kysely<DB> | Transaction<DB>;

@@ -22,27 +22,3 @@ export class RegisterDto {
   @Matches(/\S{12,}/, { message: 'password must contain at least 12 non-whitespace characters' })
   password!: string;
 }
-
-export class LoginDto {
-  @ApiProperty({ example: 'player@example.com' })
-  @IsEmail()
-  email!: string;
-
-  @ApiProperty()
-  @IsString()
-  @MaxLength(128)
-  password!: string;
-}
-
-export class RefreshDto {
-  @ApiProperty()
-  @IsString()
-  refreshToken!: string;
-}
-
-export class AuthResponseDto {
-  @ApiProperty() accessToken!: string;
-  @ApiProperty() refreshToken!: string;
-  @ApiProperty() expiresIn!: number;
-  @ApiProperty() user!: { id: string; email: string; displayName: string; role: string };
-}

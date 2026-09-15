@@ -1,0 +1,10 @@
+# The API app lives at the repo root; `packages/*` holds anything it shares with
+# other repos. Only @tessera/contracts is here, consumed by tessera-web over a
+# git dependency (ADR-004).
+packages:
+  - 'packages/*'
+
+onlyBuiltDependencies:
+  - argon2
+  - '@parcel/watcher'
+  - unrs-resolver

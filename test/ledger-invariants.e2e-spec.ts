@@ -1,8 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import fc from 'fast-check';
 import type { Kysely } from 'kysely';
-import { Money } from '../src/common/money';
-import { SYSTEM_ACCOUNTS, type DB } from '../src/database/schema';
+import { Money } from '../src/common/value-objects/money';
+import { SYSTEM_ACCOUNTS, type DB } from '../src/database/database.types';
 import { LedgerService } from '../src/ledger/ledger.service';
 import { TransactionKind } from '../src/ledger/ledger.types';
 import { createTestApp, resetDatabase } from './helpers/test-app';

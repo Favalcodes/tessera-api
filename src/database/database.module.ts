@@ -2,9 +2,9 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Kysely, PostgresDialect } from 'kysely';
 import { Pool, types as pgTypes } from 'pg';
-import type { Env } from '../config/env';
+import type { Env } from '../config/env.validation';
 import { DatabaseService, KYSELY } from './database.service';
-import type { DB } from './schema';
+import type { DB } from './database.types';
 
 /**
  * Postgres returns BIGINT as a string, because a bigint can exceed what a JS

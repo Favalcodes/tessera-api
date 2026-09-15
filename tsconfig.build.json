@@ -2,7 +2,11 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": "./src",
-    "noEmit": false
+    "noEmit": false,
+    // Inside dist, so that deleting the output directory also clears the
+    // incremental state. Left at the project root, a wiped dist plus a surviving
+    // .tsbuildinfo makes tsc believe everything is already emitted.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test", "**/*.spec.ts", "**/*.e2e-spec.ts"]

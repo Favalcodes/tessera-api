@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { sql, type Transaction } from 'kysely';
-import { Money } from '../common/money';
+import { Money } from '../common/value-objects/money';
 import { DatabaseService } from '../database/database.service';
-import { SYSTEM_ACCOUNTS, walletKey, type DB } from '../database/schema';
-import { AccountNotFoundError, InsufficientFundsError, UnbalancedTransactionError } from './ledger.errors';
+import { SYSTEM_ACCOUNTS, walletKey, type DB } from '../database/database.types';
+import { AccountNotFoundError, InsufficientFundsError, UnbalancedTransactionError } from './exceptions/ledger.exceptions';
 import type { Executor, LedgerEntryView, PostInput, PostedTransaction } from './ledger.types';
 
 /**

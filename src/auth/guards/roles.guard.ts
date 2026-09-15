@@ -1,7 +1,7 @@
 import { CanActivate, type ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ROLES_KEY } from '../decorators/roles.decorator';
-import type { RequestWithUser } from './jwt-auth.guard';
+import { ROLES_KEY } from '../../common/decorators/roles.decorator';
+import type { AuthenticatedRequest } from '../../common/types/authenticated-request';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -14,7 +14,7 @@ export class RolesGuard implements CanActivate {
     ]);
     if (!required?.length) return true;
 
-    const { user } = context.switchToHttp().getRequest<RequestWithUser>();
+    const { user } = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (!user || !required.includes(user.role)) {
       throw new ForbiddenException('Insufficient permissions');
     }

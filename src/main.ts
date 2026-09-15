@@ -5,8 +5,8 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
-import { DomainExceptionFilter } from './common/filters/domain-exception.filter';
-import { corsOrigins, type Env } from './config/env';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { corsOrigins, type Env } from './config/env.validation';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
@@ -24,7 +24,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  app.useGlobalFilters(new DomainExceptionFilter());
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   app.enableCors({
     origin: corsOrigins(config.get('CORS_ORIGINS', { infer: true })),

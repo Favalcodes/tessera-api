@@ -1,6 +1,6 @@
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { Kysely } from 'kysely';
-import type { DB } from './schema';
+import type { DB } from './database.types';
 
 export const KYSELY = Symbol('KYSELY');
 

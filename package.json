@@ -6,16 +6,16 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "build": "nest build",
+    "build": "pnpm run build:contracts && nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",
     "lint": "eslint \"{src,test}/**/*.ts\"",
     "format": "prettier --write \"{src,test}/**/*.ts\"",
     "typecheck": "tsc --noEmit",
-    "test": "jest --runInBand",
+    "test": "pnpm run build:contracts && jest --runInBand",
     "test:watch": "jest --watch --runInBand",
-    "test:cov": "jest --coverage --runInBand",
+    "test:cov": "pnpm run build:contracts && jest --coverage --runInBand",
     "migrate": "node-pg-migrate -j sql -m migrations up",
     "migrate:down": "node-pg-migrate -j sql -m migrations down",
     "migrate:create": "node-pg-migrate -j sql -m migrations create",
@@ -23,7 +23,8 @@
     "db:down": "./scripts/db.sh down",
     "db:status": "./scripts/db.sh status",
     "db:psql": "./scripts/db.sh psql",
-    "db:reset": "./scripts/db.sh reset && pnpm migrate"
+    "db:reset": "./scripts/db.sh reset && pnpm migrate",
+    "build:contracts": "pnpm --filter @tessera/contracts build"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
@@ -32,7 +33,9 @@
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/platform-express": "^11.1.6",
     "@nestjs/swagger": "^11.2.0",
+    "@nestjs/terminus": "^11.1.1",
     "@nestjs/throttler": "^6.4.0",
+    "@tessera/contracts": "workspace:*",
     "argon2": "^0.44.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
@@ -69,12 +72,5 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "argon2",
-      "@parcel/watcher",
-      "unrs-resolver"
-    ]
   }
 }

@@ -2,19 +2,21 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import { timingSafeEqual } from 'node:crypto';
-import type { Env } from '../config/env';
-import { Money } from '../common/money';
+import type { Env } from '../config/env.validation';
+import { Money } from '../common/value-objects/money';
 import { DatabaseService } from '../database/database.service';
-import { SYSTEM_ACCOUNTS } from '../database/schema';
+import { SYSTEM_ACCOUNTS } from '../database/database.types';
 import { LedgerService } from '../ledger/ledger.service';
+import { UsersService } from '../users/users.service';
 import { TransactionKind } from '../ledger/ledger.types';
 import {
   EmailAlreadyRegisteredError,
   InvalidCredentialsError,
   InvalidRefreshTokenError,
   RefreshTokenReuseError,
-} from './auth.errors';
-import type { LoginDto, RegisterDto } from './dto/auth.dto';
+} from './exceptions/auth.exceptions';
+import type { LoginDto } from './dto/login.dto';
+import type { RegisterDto } from './dto/register.dto';
 import { TokensService } from './tokens.service';
 
 export interface AuthenticatedUser {
@@ -60,6 +62,7 @@ export class AuthService {
 
   constructor(
     private readonly database: DatabaseService,
+    private readonly users: UsersService,
     private readonly ledger: LedgerService,
     private readonly tokens: TokensService,
     private readonly config: ConfigService<Env, true>,
@@ -79,12 +82,7 @@ export class AuthService {
    * history and counts toward credits-in-circulation for free.
    */
   async register(dto: RegisterDto): Promise<AuthResult> {
-    const existing = await this.database.db
-      .selectFrom('users')
-      .select(['id'])
-      .where('email', '=', dto.email)
-      .executeTakeFirst();
-
+    const existing = await this.users.findByEmail(dto.email);
     if (existing) throw new EmailAlreadyRegisteredError();
 
     const passwordHash = await argon2.hash(dto.password, ARGON2_OPTIONS);
@@ -92,15 +90,10 @@ export class AuthService {
 
     try {
       return await this.database.db.transaction().execute(async (trx) => {
-        const user = await trx
-          .insertInto('users')
-          .values({
-            email: dto.email,
-            display_name: dto.displayName.trim(),
-            password_hash: passwordHash,
-          })
-          .returning(['id', 'email', 'display_name', 'role'])
-          .executeTakeFirstOrThrow();
+        const user = await this.users.create(
+          { email: dto.email, displayName: dto.displayName, passwordHash },
+          trx,
+        );
 
         const walletId = await this.ledger.createWallet(user.id, trx);
 
@@ -119,7 +112,7 @@ export class AuthService {
         const { token: refreshToken } = await this.tokens.issueRefreshToken(user.id, trx);
 
         return this.buildResult(
-          { id: user.id, email: user.email, displayName: user.display_name, role: user.role },
+          { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
           refreshToken,
         );
       });
@@ -135,15 +128,11 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {
-    const user = await this.database.db
-      .selectFrom('users')
-      .select(['id', 'email', 'display_name', 'role', 'password_hash', 'status'])
-      .where('email', '=', dto.email)
-      .executeTakeFirst();
+    const user = await this.users.findByEmailWithSecret(dto.email);
 
     // Always perform a verification, even with no matching user, so the timing
     // of a failed login does not reveal whether the address exists.
-    const hash = user?.password_hash ?? (await getDummyHash());
+    const hash = user?.passwordHash ?? (await getDummyHash());
     const passwordValid = await argon2.verify(hash, dto.password).catch(() => false);
 
     if (!user || !passwordValid) {
@@ -157,7 +146,7 @@ export class AuthService {
     return this.database.db.transaction().execute(async (trx) => {
       const { token: refreshToken } = await this.tokens.issueRefreshToken(user.id, trx);
       return this.buildResult(
-        { id: user.id, email: user.email, displayName: user.display_name, role: user.role },
+        { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
         refreshToken,
       );
     });
@@ -228,6 +217,7 @@ export class AuthService {
         .executeTakeFirst();
 
       if (!user || user.status === 'suspended') return { kind: 'invalid' };
+
 
       const { token: refreshToken } = await this.tokens.issueRefreshToken(
         user.id,

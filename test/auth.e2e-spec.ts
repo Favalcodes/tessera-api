@@ -2,8 +2,8 @@ import type { INestApplication } from '@nestjs/common';
 import type { Kysely } from 'kysely';
 import request from 'supertest';
 import type { App } from 'supertest/types';
-import { Money } from '../src/common/money';
-import { SYSTEM_ACCOUNTS, type DB } from '../src/database/schema';
+import { Money } from '../src/common/value-objects/money';
+import { SYSTEM_ACCOUNTS, type DB } from '../src/database/database.types';
 import { LedgerService } from '../src/ledger/ledger.service';
 import { createTestApp, resetDatabase, uniqueEmail } from './helpers/test-app';
 
@@ -211,15 +211,25 @@ describe('Auth and the signup grant', () => {
   });
 
   describe('health', () => {
+    it('reports readiness', async () => {
+      const res = await http().get('/health/ready').expect(200);
+      expect(res.body).toMatchObject({ status: 'ok', info: { database: { status: 'up' } } });
+    });
+
     it('reports ledger integrity', async () => {
       await register().expect(201);
 
       const res = await http().get('/health/ledger').expect(200);
       expect(res.body).toMatchObject({
         status: 'ok',
-        globalPostingSum: 0,
-        driftingAccounts: 0,
-        creditsInCirculation: '1000.00',
+        info: {
+          ledger: {
+            status: 'up',
+            globalPostingSum: 0,
+            driftingAccounts: 0,
+            creditsInCirculation: '1000.00',
+          },
+        },
       });
     });
   });

@@ -3,15 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Transaction } from 'kysely';
-import type { Env } from '../config/env';
+import type { Env } from '../config/env.validation';
 import { DatabaseService } from '../database/database.service';
-import type { DB } from '../database/schema';
-
-export interface AccessTokenPayload {
-  sub: string;
-  email: string;
-  role: string;
-}
+import type { DB } from '../database/database.types';
+import type { AccessTokenPayload } from '../common/types/authenticated-request';
 
 interface RefreshTokenPayload {
   sub: string;
@@ -103,3 +98,5 @@ export class TokensService {
       .execute();
   }
 }
+
+export type { AccessTokenPayload };

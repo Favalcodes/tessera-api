@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Kysely } from 'kysely';
 import request from 'supertest';
 import type { App } from 'supertest/types';
-import type { DB } from '../src/database/schema';
+import type { DB } from '../src/database/database.types';
 import { createTestApp, resetDatabase, uniqueEmail } from './helpers/test-app';
 
 /**

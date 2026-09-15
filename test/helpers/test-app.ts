@@ -2,9 +2,9 @@ import { ValidationPipe, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { sql, type Kysely } from 'kysely';
 import { AppModule } from '../../src/app.module';
-import { DomainExceptionFilter } from '../../src/common/filters/domain-exception.filter';
+import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { KYSELY } from '../../src/database/database.service';
-import { SYSTEM_ACCOUNTS, type DB } from '../../src/database/schema';
+import { SYSTEM_ACCOUNTS, type DB } from '../../src/database/database.types';
 
 export interface TestContext {
   app: INestApplication;
@@ -30,7 +30,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestC
 
   const app = moduleRef.createNestApplication();
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
-  app.useGlobalFilters(new DomainExceptionFilter());
+  app.useGlobalFilters(new AllExceptionsFilter());
   await app.init();
 
   return { app, db: app.get<Kysely<DB>>(KYSELY) };

@@ -5,13 +5,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { Request } from 'express';
-import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
-import { TokensService, type AccessTokenPayload } from '../tokens.service';
-
-export interface RequestWithUser extends Request {
-  user?: AccessTokenPayload;
-}
+import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
+import type { AuthenticatedRequest } from '../../common/types/authenticated-request';
+import { TokensService } from '../tokens.service';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -27,7 +23,7 @@ export class JwtAuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest<RequestWithUser>();
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const header = request.headers.authorization;
 
     if (!header?.startsWith('Bearer ')) {

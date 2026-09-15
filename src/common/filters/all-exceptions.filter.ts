@@ -12,12 +12,12 @@ import {
   InvalidCredentialsError,
   InvalidRefreshTokenError,
   RefreshTokenReuseError,
-} from '../../auth/auth.errors';
+} from '../../auth/exceptions/auth.exceptions';
 import {
   AccountNotFoundError,
   InsufficientFundsError,
   UnbalancedTransactionError,
-} from '../../ledger/ledger.errors';
+} from '../../ledger/exceptions/ledger.exceptions';
 
 interface ErrorBody {
   statusCode: number;
@@ -37,8 +37,8 @@ interface ErrorBody {
  * reviewed for what it leaks.
  */
 @Catch()
-export class DomainExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(DomainExceptionFilter.name);
+export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AllExceptionsFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();

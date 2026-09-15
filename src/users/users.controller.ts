@@ -1,50 +1,40 @@
-import { Controller, DefaultValuePipe, Get, ParseIntPipe, Query } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import type { AccessTokenPayload } from '../auth/tokens.service';
-import { Money } from '../common/money';
-import { LedgerService } from '../ledger/ledger.service';
+import { Controller, Get, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { AccessTokenPayload } from '../common/types/authenticated-request';
+import { Money } from '../common/value-objects/money';
+import { BalanceResponseDto } from './dto/balance-response.dto';
+import { LedgerPageResponseDto } from './dto/ledger-entry-response.dto';
+import { LedgerQueryDto } from './dto/ledger-query.dto';
+import { UsersService } from './users.service';
 
 @ApiTags('me')
+@ApiBearerAuth()
 @Controller('me')
 export class UsersController {
-  constructor(private readonly ledger: LedgerService) {}
+  constructor(private readonly users: UsersService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'The authenticated account' })
+  async me(@CurrentUser() user: AccessTokenPayload) {
+    return this.users.requireById(user.sub);
+  }
 
   @Get('balance')
   @ApiOperation({ summary: 'Current wallet balance, derived from the ledger' })
-  async balance(@CurrentUser() user: AccessTokenPayload) {
-    const balance = await this.ledger.getUserBalance(user.sub);
+  @ApiOkResponse({ type: BalanceResponseDto })
+  async balance(@CurrentUser() user: AccessTokenPayload): Promise<BalanceResponseDto> {
+    const balance = await this.users.getBalance(user.sub);
     return { balanceMinor: balance, balance: Money.format(balance) };
   }
 
   @Get('ledger')
   @ApiOperation({ summary: 'Immutable posting history for this account, newest first' })
-  async ledgerHistory(
+  @ApiOkResponse({ type: LedgerPageResponseDto })
+  async ledger(
     @CurrentUser() user: AccessTokenPayload,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
-    @Query('cursor') cursor?: string,
-    @Query('referenceType') referenceType?: string,
-  ) {
-    const accountId = await this.ledger.getWalletAccountId(user.sub);
-    const page = await this.ledger.getHistory(accountId, {
-      limit,
-      cursor: cursor ? Number(cursor) : undefined,
-      referenceType,
-    });
-
-    return {
-      entries: page.entries.map((e) => ({
-        id: e.id,
-        transactionId: e.transactionId,
-        kind: e.transactionKind,
-        amountMinor: e.amount,
-        amount: Money.format(e.amount),
-        direction: e.amount < 0 ? 'debit' : 'credit',
-        referenceType: e.referenceType,
-        referenceId: e.referenceId,
-        createdAt: e.createdAt.toISOString(),
-      })),
-      nextCursor: page.nextCursor,
-    };
+    @Query() query: LedgerQueryDto,
+  ): Promise<LedgerPageResponseDto> {
+    return this.users.getLedgerHistory(user.sub, query);
   }
 }
