@@ -47,6 +47,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # tessera-web installs this straight from git and pnpm runs its `prepare`
+      # script on the consumer's machine, so a package that does not build
+      # cleanly on its own breaks the other repo's install, not just this build.
+      - name: Build shared contracts
+        run: pnpm run build:contracts
+
       - name: Typecheck
         run: pnpm typecheck
 

@@ -110,9 +110,9 @@ All three are in [`migrations/1757900000000_initial-ledger.sql`](migrations/1757
   `MINT` is negative by construction, and `HOUSE` is legitimately negative when players
   are up.
 
-`GET /health/ledger` reports the global posting sum and any account whose cached balance
-has drifted from the sum of its postings. It is asserted at the end of every CI run, and
-will be asserted at the end of every Phase 2 load test.
+`GET /health/ledger` is a Terminus health indicator reporting the global posting sum and
+any account whose cached balance has drifted from the sum of its postings. It is asserted
+at the end of every CI run, and will be asserted at the end of every Phase 2 load test.
 
 ### A subtlety worth recording
 
@@ -163,7 +163,8 @@ live. The bet path would not change.
 | `POST` | `/auth/logout` | Revokes the token family |
 | `GET` | `/me/balance` | Derived from the ledger |
 | `GET` | `/me/ledger` | Keyset-paginated posting history |
-| `GET` | `/health` · `/health/db` · `/health/ledger` | Liveness, readiness, integrity |
+| `GET` | `/me` | The authenticated account |
+| `GET` | `/health` · `/health/ready` · `/health/ledger` | Liveness, readiness, integrity |
 
 Authentication is on by default — routes opt out with `@Public()`, so a new endpoint
 cannot be left unprotected by forgetting a decorator.
@@ -172,22 +173,55 @@ cannot be left unprotected by forgetting a decorator.
 
 ## Layout
 
+Conventional NestJS: feature modules at `src/` root, cross-cutting concerns in `common/`.
+
 ```
-migrations/     Hand-written SQL. Owns every constraint and trigger.
-scripts/db.sh   Local cluster lifecycle.
+migrations/            Hand-written SQL. Owns every constraint and trigger.
+scripts/db.sh          Local cluster lifecycle.
+packages/contracts/    Shared with tessera-web over a git dependency.
 src/
-  common/       Money type, error filter, throttler switch
-  config/       Env schema — the process refuses to boot on bad config
-  database/     Kysely wiring, schema types, BIGINT parsing
-  ledger/       The only code permitted to write postings
-  auth/         Registration, login, rotation, guards
-  users/        Balance and history
-  health/       Liveness, readiness, ledger integrity
-test/           e2e and property-based tests against real Postgres
+  common/
+    decorators/        @Public, @Roles, @CurrentUser
+    filters/           Domain error -> HTTP mapping
+    guards/            Rate limiting
+    types/             Authenticated request shape
+    value-objects/     Money, BasisPoints
+  config/              Env schema — the process refuses to boot on bad config
+  database/            Kysely wiring, schema types, BIGINT parsing
+  ledger/              The only code permitted to write postings
+  auth/                Registration, login, rotation, guards
+  users/               Users table, balance, history
+  health/              Terminus checks incl. the ledger invariant
+test/                  e2e and property-based tests against real Postgres
 ```
 
 Tests run against real Postgres, never a mock, because every guarantee here is enforced by
 Postgres. A mocked database would be testing the mock.
+
+---
+
+## The shared contract
+
+`packages/contracts` is the single definition of everything both repos must agree on:
+wire types, and the arithmetic. `formatMinorUnits` and `applyBasisPoints` live there, so
+the payout the client displays and the payout the server settles are the *same function*
+rather than two implementations that happen to agree today.
+
+The API consumes it through a pnpm workspace. `tessera-web` installs it from git — no
+registry, no publish step:
+
+```bash
+pnpm add "github:<owner>/tessera-api#path:/packages/contracts"
+```
+
+The package is deliberately dependency-free and framework-free. pnpm runs its `prepare`
+script on the consumer's machine, so anything it needs to build, the consumer pays for;
+and it has to compile unchanged in both a browser and Node, because it does both.
+
+Phase 2's multiplier curve and Phase 4's fairness verifier belong here for the same
+reason: the client interpolates the climbing multiplier locally from a broadcast
+timestamp, and a curve that differs from the server's by a rounding step would show a
+player a number the server will not pay.
 
 ---
 
