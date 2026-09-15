@@ -24,10 +24,16 @@ export default async function globalSetup(): Promise<void> {
   const testUrl = new URL(ADMIN_URL);
   testUrl.pathname = `/${TEST_DB}`;
 
-  execFileSync('pnpm', ['exec', 'node-pg-migrate', '-j', 'sql', '-m', 'migrations', 'up'], {
-    env: { ...process.env, DATABASE_URL: testUrl.toString() },
-    stdio: 'pipe',
-  });
+  // --no-single-transaction because adding an enum value and using it cannot
+  // share a transaction; each migration needs its own.
+  execFileSync(
+    'pnpm',
+    ['exec', 'node-pg-migrate', '-j', 'sql', '-m', 'migrations', '--no-single-transaction', 'up'],
+    {
+      env: { ...process.env, DATABASE_URL: testUrl.toString() },
+      stdio: 'pipe',
+    },
+  );
 
   process.env.DATABASE_URL = testUrl.toString();
 }

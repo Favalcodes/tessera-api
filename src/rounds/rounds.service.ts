@@ -357,16 +357,20 @@ export class RoundsService {
   }
 
   toRoundView(row: RoundRow): RoundView {
-    const crashed = row.status === 'CRASHED' || row.status === 'SETTLED';
+    const concluded = row.status === 'CRASHED' || row.status === 'SETTLED';
+    // A voided round reveals its seed too, so voids can be audited against the
+    // outcomes they discarded — but it does not report a crash point, because
+    // no outcome was used.
+    const revealed = concluded || row.status === 'VOIDED';
 
     return {
       id: row.id,
       status: row.status as RoundStatus,
       seedHash: row.seed_hash,
-      // Both of these are withheld until the round has crashed. Publishing
-      // either earlier would hand a player the outcome before they bet.
-      seedRevealed: crashed ? row.seed_revealed : null,
-      crashPointBp: crashed ? row.crash_point_bp : null,
+      // Withheld until the round concludes. Publishing either earlier would hand
+      // a player the outcome before they bet.
+      seedRevealed: revealed ? row.seed_revealed : null,
+      crashPointBp: concluded ? row.crash_point_bp : null,
       opensAt: row.opens_at.toISOString(),
       locksAt: row.locks_at.toISOString(),
       startedAt: row.started_at?.toISOString() ?? null,

@@ -69,7 +69,7 @@ export interface RefreshTokensTable {
   created_at: CreatedAt;
 }
 
-export type RoundStatusDb = 'OPEN' | 'LOCKED' | 'FLYING' | 'CRASHED' | 'SETTLED';
+export type RoundStatusDb = 'OPEN' | 'LOCKED' | 'FLYING' | 'CRASHED' | 'SETTLED' | 'VOIDED';
 export type BetStatusDb = 'ACTIVE' | 'CASHED_OUT' | 'LOST' | 'VOIDED';
 
 export interface RoundsTable {

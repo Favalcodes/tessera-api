@@ -18,6 +18,15 @@ export const RoundStatus = {
   CRASHED: 'CRASHED',
   /** Every bet has been resolved and posted to the ledger. */
   SETTLED: 'SETTLED',
+  /**
+   * The round could not be completed and every stake was returned.
+   *
+   * Reached when the engine was not running long enough for the round to be
+   * resolved on time — players had no opportunity to cash out, so charging them
+   * for it would be wrong. A voided round still reveals its seed, so voids can
+   * be audited against the outcomes they discarded.
+   */
+  VOIDED: 'VOIDED',
 } as const;
 
 export type RoundStatus = (typeof RoundStatus)[keyof typeof RoundStatus];

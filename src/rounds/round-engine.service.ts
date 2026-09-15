@@ -120,8 +120,21 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
 
       case 'FLYING': {
         if (!live.started_at) return;
+
+        const elapsed = now - live.started_at.getTime();
         const crashAfterMs = elapsedAtMultiplier(live.crash_point_bp);
-        if (now - live.started_at.getTime() >= crashAfterMs) {
+        const grace = this.config.get('ROUND_STALE_GRACE_MS', { infer: true });
+
+        // Far past the crash point means nobody was resolving this round — the
+        // engine was down. Crashing it now would mark every still-active bet as
+        // lost, charging players for a round they had no opportunity to cash out
+        // of. Refund instead.
+        if (elapsed >= crashAfterMs + grace) {
+          await this.voidRound(live.id, `engine was not running; ${elapsed - crashAfterMs}ms late`);
+          return;
+        }
+
+        if (elapsed >= crashAfterMs) {
           await this.crashRound(live.id);
         }
         return;
@@ -294,6 +307,93 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
 
       this.logger.log(`Round ${round.nonce} settled (${activeBets.length} lost)`);
     });
+  }
+
+  /**
+   * Abandon a round and return every stake.
+   *
+   * The failure this exists for is an engine outage mid-flight. On restart the
+   * round is long past its crash point, and resolving it normally would write
+   * off every active bet — the player was charged for a round they could not
+   * act in. Voiding returns the stakes from escrow and leaves the books square.
+   *
+   * The seed is revealed even though the outcome was discarded. Voiding is the
+   * only power the operator has to make a round not count, so an operator able
+   * to void silently could dodge expensive payouts by voiding whenever the drawn
+   * outcome was costly. Revealing makes every void auditable against what it
+   * discarded.
+   */
+  async voidRound(roundId: string, reason: string): Promise<void> {
+    await this.db.transaction().execute(async (trx) => {
+      const round = await trx
+        .selectFrom('rounds')
+        .select(['id', 'nonce', 'status', 'seed'])
+        .where('id', '=', roundId)
+        .forUpdate()
+        .executeTakeFirst();
+
+      if (!round || round.status === 'VOIDED' || round.status === 'SETTLED') return;
+
+      const activeBets = await trx
+        .selectFrom('bets')
+        .select(['id', 'user_id', 'stake_minor'])
+        .where('round_id', '=', roundId)
+        .where('status', '=', 'ACTIVE')
+        .forUpdate()
+        .execute();
+
+      for (const bet of activeBets) {
+        await this.refundBet(trx, bet);
+      }
+
+      await trx
+        .updateTable('rounds')
+        .set({
+          status: 'VOIDED',
+          seed_revealed: round.seed,
+          settled_at: sql<Date>`clock_timestamp()`,
+        })
+        .where('id', '=', roundId)
+        .execute();
+
+      this.logger.warn(
+        `Round ${round.nonce} voided (${reason}); refunded ${activeBets.length} stake(s)`,
+      );
+    });
+  }
+
+  private async refundBet(
+    trx: Transaction<DB>,
+    bet: { id: string; user_id: string; stake_minor: number },
+  ): Promise<void> {
+    const stake = Money.fromMinor(bet.stake_minor);
+
+    await trx
+      .updateTable('bets')
+      .set({
+        status: 'VOIDED',
+        payout_minor: stake,
+        settled_at: sql<Date>`clock_timestamp()`,
+      })
+      .where('id', '=', bet.id)
+      .where('status', '=', 'ACTIVE')
+      .execute();
+
+    const walletId = await this.ledger.getWalletAccountId(bet.user_id, trx);
+
+    // Straight back out of escrow. The house is not involved: no outcome was
+    // used, so nobody won or lost anything.
+    await this.ledger.post(
+      {
+        kind: TransactionKind.ROUND_VOID_REFUND,
+        reference: { type: 'bet', id: bet.id },
+        postings: [
+          { accountId: SYSTEM_ACCOUNTS.ESCROW, amount: Money.negate(stake) },
+          { accountId: walletId, amount: stake },
+        ],
+      },
+      trx,
+    );
   }
 
   private async settleLostBet(

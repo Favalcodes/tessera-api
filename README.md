@@ -209,6 +209,20 @@ unique index refuses a second live round regardless.
 The engine has **no transport dependencies** — it does not import a gateway or know what
 a WebSocket is. Phase 3 subscribes to it rather than changing it.
 
+### When the engine stops
+
+A round found more than five seconds past its crash point means nothing was resolving it
+— a healthy engine does so within one 100ms tick. Resolving it normally at that point
+would mark every still-active bet as lost, charging players for a round they had no
+opportunity to cash out of. So the round is **voided** instead and every stake refunded
+straight out of escrow; the house neither wins nor loses, because no outcome was used.
+Players who cashed out before the outage keep their winnings.
+
+The seed is revealed on a void as well. Voiding is the only power the operator has to
+make a round not count, so an operator able to void silently could dodge expensive
+payouts by voiding whenever the drawn outcome was costly. Revealing makes every void
+auditable against the outcome it discarded.
+
 ### Fairness today
 
 A round draws a random seed when it opens, publishes `sha256(seed)`, and reveals the seed
