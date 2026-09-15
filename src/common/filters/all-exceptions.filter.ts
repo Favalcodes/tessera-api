@@ -18,6 +18,17 @@ import {
   InsufficientFundsError,
   UnbalancedTransactionError,
 } from '../../ledger/exceptions/ledger.exceptions';
+import {
+  BetAlreadySettledError,
+  CashOutTooLateError,
+  DuplicateBetError,
+  NoActiveRoundError,
+  NoBetOnRoundError,
+  RoundNotFlyingError,
+  RoundNotFoundError,
+  RoundNotOpenError,
+  StakeOutOfRangeError,
+} from '../../rounds/exceptions/rounds.exceptions';
 
 interface ErrorBody {
   statusCode: number;
@@ -105,6 +116,35 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (exception instanceof AccountNotFoundError) {
       return { status: HttpStatus.NOT_FOUND, error: exception.name, message: exception.message };
+    }
+
+    // Round and bet errors.
+    //
+    // All of these describe a client asking for something the current state does
+    // not allow — a late cash-out, a bet after the window closed. That is a 404
+    // or a 409, never a 500. Left unmapped they fall through to "an unexpected
+    // error occurred", which tells the client nothing and makes a perfectly
+    // correct refusal look like a broken server.
+    if (
+      exception instanceof NoActiveRoundError ||
+      exception instanceof RoundNotFoundError ||
+      exception instanceof NoBetOnRoundError
+    ) {
+      return { status: HttpStatus.NOT_FOUND, error: exception.name, message: exception.message };
+    }
+
+    if (
+      exception instanceof RoundNotOpenError ||
+      exception instanceof RoundNotFlyingError ||
+      exception instanceof CashOutTooLateError ||
+      exception instanceof BetAlreadySettledError ||
+      exception instanceof DuplicateBetError
+    ) {
+      return { status: HttpStatus.CONFLICT, error: exception.name, message: exception.message };
+    }
+
+    if (exception instanceof StakeOutOfRangeError) {
+      return { status: HttpStatus.BAD_REQUEST, error: exception.name, message: exception.message };
     }
 
     // An unbalanced transaction reaching this layer means a bug in the calling
