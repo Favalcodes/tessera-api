@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: tessera
+          POSTGRES_PASSWORD: tessera
+          POSTGRES_DB: tessera
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U tessera -d tessera"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      # The test harness creates and migrates `tessera_test` from this connection.
+      TEST_ADMIN_URL: postgres://tessera:tessera@127.0.0.1:5434/tessera
+      DATABASE_URL: postgres://tessera:tessera@127.0.0.1:5434/tessera
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Migrate
+        run: pnpm migrate
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      # The system's core claim, asserted in CI rather than only in prose.
+      - name: Assert ledger integrity
+        run: |
+          node -e "
+          const { Client } = require('pg');
+          (async () => {
+            const c = new Client({ connectionString: process.env.TEST_ADMIN_URL.replace(/\/tessera$/, '/tessera_test') });
+            await c.connect();
+            const { rows } = await c.query('SELECT COALESCE(SUM(amount), 0)::bigint AS total FROM entries');
+            await c.end();
+            if (Number(rows[0].total) !== 0) {
+              console.error('LEDGER INTEGRITY FAILURE: postings sum to', rows[0].total);
+              process.exit(1);
+            }
+            console.log('Ledger balances: global posting sum is 0');
+          })();
+          "
