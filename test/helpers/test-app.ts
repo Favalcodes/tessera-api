@@ -45,7 +45,7 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestC
  */
 export async function resetDatabase(db: Kysely<DB>): Promise<void> {
   await sql`
-    TRUNCATE TABLE refresh_tokens, entries, transactions, balances, accounts, users
+    TRUNCATE TABLE bets, rounds, refresh_tokens, entries, transactions, balances, accounts, users
     RESTART IDENTITY CASCADE
   `.execute(db);
 

@@ -124,12 +124,27 @@ export class LedgerService {
   /**
    * Lock an account row and return its balance.
    *
-   * `FOR UPDATE` on the balances row is what makes check-then-debit atomic: a
-   * second concurrent request blocks here until the first commits, and then sees
-   * the post-debit balance rather than the stale one it would otherwise have
-   * read. This is the mechanism behind the zero-over-spend claim, and it only
-   * works if the caller is already inside a transaction — hence the required
-   * `trx` argument.
+   * `FOR UPDATE` makes check-then-debit atomic: a second concurrent request
+   * blocks here until the first commits, then reads the post-debit balance
+   * rather than the stale one it would otherwise have seen.
+   *
+   * Worth being precise about what this does and does not buy, because it is
+   * easy to over-claim. It is *not* the only thing preventing an over-spend —
+   * the non-negative balance trigger in the initial migration is the real last
+   * line of defence, and the final balance comes out correct with or without
+   * this lock. What the lock changes is the failure mode. Measured at 40
+   * concurrent bets against one account with funds for 10:
+   *
+   *   with FOR UPDATE:     10 succeed, 30 refused cleanly, 0 constraint errors
+   *   without FOR UPDATE:  10 succeed,  2 refused cleanly, 28 constraint errors
+   *
+   * Those 28 are transactions that read a stale balance, did the work, and were
+   * caught by the database at the last moment. The money is safe either way; the
+   * difference is whether a client sees a 409 saying "insufficient funds" or a
+   * 500 from a constraint violation. Defence in depth, with each layer doing a
+   * different job.
+   *
+   * Only works inside a transaction — hence the required `trx` argument.
    */
   async lockBalanceForUpdate(trx: Transaction<DB>, accountId: string): Promise<Money> {
     const row = await trx

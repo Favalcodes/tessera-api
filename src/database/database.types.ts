@@ -69,6 +69,39 @@ export interface RefreshTokensTable {
   created_at: CreatedAt;
 }
 
+export type RoundStatusDb = 'OPEN' | 'LOCKED' | 'FLYING' | 'CRASHED' | 'SETTLED';
+export type BetStatusDb = 'ACTIVE' | 'CASHED_OUT' | 'LOST' | 'VOIDED';
+
+export interface RoundsTable {
+  id: Generated<string>;
+  nonce: Generated<number>;
+  status: Generated<RoundStatusDb>;
+  /** Private. Never select this into an API response. */
+  seed: string;
+  seed_hash: string;
+  seed_revealed: string | null;
+  crash_point_bp: number;
+  opens_at: Generated<Date>;
+  locks_at: ColumnType<Date, Date, Date>;
+  started_at: NullableTimestamp;
+  crashed_at: NullableTimestamp;
+  settled_at: NullableTimestamp;
+  created_at: CreatedAt;
+}
+
+export interface BetsTable {
+  id: Generated<string>;
+  user_id: string;
+  round_id: string;
+  stake_minor: number;
+  status: Generated<BetStatusDb>;
+  cashout_multiplier_bp: number | null;
+  payout_minor: number | null;
+  idempotency_key: string;
+  created_at: CreatedAt;
+  settled_at: NullableTimestamp;
+}
+
 export interface DB {
   users: UsersTable;
   accounts: AccountsTable;
@@ -76,6 +109,8 @@ export interface DB {
   entries: EntriesTable;
   balances: BalancesTable;
   refresh_tokens: RefreshTokensTable;
+  rounds: RoundsTable;
+  bets: BetsTable;
 }
 
 /** Fixed ids for the singleton system accounts, seeded in the initial migration. */

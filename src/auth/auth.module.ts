@@ -13,6 +13,10 @@ import { TokensService } from './tokens.service';
   imports: [JwtModule.register({}), LedgerModule, UsersModule],
   controllers: [AuthController],
   providers: [AuthService, TokensService, JwtAuthGuard, RolesGuard, AccountStatusGuard],
-  exports: [AuthService, TokensService, JwtAuthGuard, RolesGuard, AccountStatusGuard],
+  // UsersModule is re-exported because AccountStatusGuard depends on UsersService
+  // and guards are instantiated in the injector of whichever module applies them.
+  // Without this, every module using the guard would have to import UsersModule
+  // itself and know why.
+  exports: [AuthService, TokensService, JwtAuthGuard, RolesGuard, AccountStatusGuard, UsersModule],
 })
 export class AuthModule {}

@@ -11,6 +11,7 @@ import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
 import { LedgerModule } from './ledger/ledger.module';
+import { RoundsModule } from './rounds/rounds.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -53,6 +54,7 @@ import { UsersModule } from './users/users.module';
     LedgerModule,
     AuthModule,
     UsersModule,
+    RoundsModule,
     HealthModule,
   ],
   providers: [

@@ -31,6 +31,13 @@ export const envSchema = z
 
     SIGNUP_GRANT_MINOR: z.coerce.number().int().positive().default(100_000),
 
+    /** How long bets are accepted before a round locks and takes off. */
+    ROUND_BETTING_WINDOW_MS: z.coerce.number().int().min(1_000).default(15_000),
+    /** Pause between one round settling and the next opening. */
+    ROUND_INTERMISSION_MS: z.coerce.number().int().min(0).default(4_000),
+    MIN_STAKE_MINOR: z.coerce.number().int().positive().default(100),
+    MAX_STAKE_MINOR: z.coerce.number().int().positive().default(1_000_000),
+
     /** Operational off switch for rate limiting; see ConfigurableThrottlerGuard. */
     THROTTLE_ENABLED: z
       .enum(['true', 'false'])
@@ -52,6 +59,14 @@ export const envSchema = z
     // The .env.example placeholders are deliberately long enough to pass the length
     // check so local setup is frictionless. That makes it entirely possible to ship
     // them by accident, so production refuses them by name.
+    if (env.MIN_STAKE_MINOR > env.MAX_STAKE_MINOR) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MIN_STAKE_MINOR'],
+        message: 'minimum stake cannot exceed the maximum',
+      });
+    }
+
     if (env.NODE_ENV === 'production' && !env.THROTTLE_ENABLED) {
       ctx.addIssue({
         code: 'custom',

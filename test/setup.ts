@@ -15,5 +15,9 @@ process.env.SIGNUP_GRANT_MINOR = '100000';
 process.env.LOG_LEVEL = 'fatal';
 process.env.PORT = '3001';
 process.env.THROTTLE_ENABLED = 'false';
+// Large enough that the concurrency specs create genuine contention. At the
+// default of 10, 40 "simultaneous" requests queue behind the pool and mostly
+// run in sequence — which makes the race tests pass for the wrong reason.
+process.env.DATABASE_POOL_MAX = '40';
 
 jest.setTimeout(30_000);
