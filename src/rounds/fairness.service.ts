@@ -28,7 +28,9 @@ export class FairnessService {
         'rounds.status as status',
         'rounds.seed_hash as seed_hash',
         'rounds.seed_revealed as seed_revealed',
+        'rounds.game as game',
         'rounds.crash_point_bp as crash_point_bp',
+        'rounds.winning_pocket as winning_pocket',
         'rounds.chain_index as chain_index',
         'fairness_chains.genesis_hash as genesis_hash',
         'fairness_chains.length as chain_length',
@@ -43,12 +45,14 @@ export class FairnessService {
 
     return {
       roundId: round.id,
+      game: round.game,
       nonce: Number(round.nonce),
       seedHash: round.seed_hash,
       // Same disclosure rules as the round itself: nothing that would hand a
       // player the outcome before they bet.
       seedRevealed: revealed ? round.seed_revealed : null,
       crashPointBp: concluded ? round.crash_point_bp : null,
+      winningPocket: concluded ? round.winning_pocket : null,
       genesisHash: round.genesis_hash ?? '',
       chainIndex: round.chain_index ?? 0,
       chainLength: round.chain_length ?? 0,
@@ -56,9 +60,11 @@ export class FairnessService {
         seedHash: 'sha256(seed)',
         outcomeHash: 'hmac_sha256(key = seed, message = nonce)',
         crashPoint:
-          'bustRoll = parseInt(outcomeHash[0..8], 16); if bustRoll % 101 == 0 then 1.00x, ' +
-          'else h = parseInt(outcomeHash[8..21], 16), e = 2^52, ' +
-          'crash = floor((100e - h) / (e - h)) / 100',
+          round.game === 'CRASH'
+            ? 'bustRoll = parseInt(outcomeHash[0..8], 16); if bustRoll % 101 == 0 then 1.00x, ' +
+              'else h = parseInt(outcomeHash[8..21], 16), e = 2^52, ' +
+              'crash = floor((100e - h) / (e - h)) / 100'
+            : 'pocket = parseInt(outcomeHash[0..13], 16) % 37',
         chain:
           'sha256 applied to the revealed seed chainIndex times equals genesisHash, ' +
           'which was published before this chain\'s first round opened',
