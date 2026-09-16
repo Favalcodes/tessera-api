@@ -68,7 +68,9 @@ at `/Library/PostgreSQL/17/bin`.
 |---|---|
 | `pnpm db:up` / `db:down` / `db:status` | Cluster lifecycle |
 | `pnpm db:psql` | Open a shell on the dev database |
-| `pnpm db:reset` | Destroy, recreate and re-migrate |
+| `pnpm db:reset` | Back up, drop and recreate the database, re-migrate. **Refuses while accounts exist** — `FORCE=1` to override |
+| `./scripts/db.sh backup` | Dump the database to `~/.tessera/backups/` |
+| `FORCE=1 ./scripts/db.sh destroy` | Remove the whole cluster. Never run automatically |
 | `pnpm typecheck` / `lint` / `test` / `build` | What CI runs |
 
 ---
