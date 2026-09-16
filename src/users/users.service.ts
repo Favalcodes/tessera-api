@@ -4,6 +4,7 @@ import { Money } from '../common/value-objects/money';
 import { DatabaseService } from '../database/database.service';
 import type { DB, UserRole, UserStatus } from '../database/database.types';
 import { LedgerService } from '../ledger/ledger.service';
+import type { LedgerEntryContext, LedgerPage } from '@tessera/contracts';
 import type { LedgerQueryDto } from './dto/ledger-query.dto';
 
 export interface UserRecord {
@@ -95,13 +96,23 @@ export class UsersService {
     return this.ledger.getUserBalance(userId);
   }
 
-  async getLedgerHistory(userId: string, query: LedgerQueryDto) {
+  async getLedgerHistory(userId: string, query: LedgerQueryDto): Promise<LedgerPage> {
     const accountId = await this.ledger.getWalletAccountId(userId);
-    const page = await this.ledger.getHistory(accountId, {
-      limit: query.limit,
-      cursor: query.cursor,
-      referenceType: query.referenceType,
-    });
+
+    const [page, total] = await Promise.all([
+      this.ledger.getHistory(accountId, {
+        limit: query.limit,
+        cursor: query.cursor,
+        referenceType: query.referenceType,
+      }),
+      this.ledger.countEntries(accountId, query.referenceType),
+    ]);
+
+    const context = await this.betContext(
+      page.entries
+        .filter((entry) => entry.referenceType === 'bet' && entry.referenceId)
+        .map((entry) => entry.referenceId as string),
+    );
 
     return {
       entries: page.entries.map((entry) => ({
@@ -114,9 +125,58 @@ export class UsersService {
         referenceType: entry.referenceType,
         referenceId: entry.referenceId,
         createdAt: entry.createdAt.toISOString(),
+        context: entry.referenceId ? (context.get(entry.referenceId) ?? null) : null,
       })),
       nextCursor: page.nextCursor,
+      total,
     };
+  }
+
+  /**
+   * Resolve which game each referenced bet belonged to.
+   *
+   * One query for the whole page rather than one per row. The ledger stays
+   * game-agnostic — it records movements between accounts and nothing else —
+   * so this join lives here, where a statement is being presented, rather than
+   * inside the ledger where it would not belong.
+   */
+  private async betContext(betIds: string[]): Promise<Map<string, LedgerEntryContext>> {
+    if (betIds.length === 0) return new Map();
+
+    const rows = await this.db
+      .selectFrom('bets')
+      .innerJoin('rounds', 'rounds.id', 'bets.round_id')
+      .select([
+        'bets.id as bet_id',
+        'bets.selection_type as selection_type',
+        'bets.selection_value as selection_value',
+        'bets.settled_multiplier_bp as multiplier_bp',
+        'rounds.game as game',
+        'rounds.nonce as nonce',
+      ])
+      .where('bets.id', 'in', betIds)
+      .execute();
+
+    return new Map(
+      rows.map((row) => [
+        row.bet_id,
+        {
+          game: row.game,
+          roundNonce: Number(row.nonce),
+          ...(row.selection_type
+            ? {
+                selection: {
+                  type: row.selection_type,
+                  ...(row.selection_value === null
+                    ? {}
+                    : { value: Number(row.selection_value) }),
+                },
+              }
+            : {}),
+          ...(row.multiplier_bp === null ? {} : { multiplierBp: row.multiplier_bp }),
+        },
+      ]),
+    );
   }
 
   async requireById(id: string): Promise<UserRecord> {

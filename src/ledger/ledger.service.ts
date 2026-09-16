@@ -241,6 +241,21 @@ export class LedgerService {
    * ledger only ever grows, so an offset-based page would shift under a reader
    * and silently skip rows.
    */
+  /** Total postings on an account, for a paginated view to report its position. */
+  async countEntries(accountId: string, referenceType?: string): Promise<number> {
+    // The join is always present so the builder has one static type; without a
+    // filter it costs nothing, since every entry has exactly one transaction.
+    const row = await this.db
+      .selectFrom('entries as e')
+      .innerJoin('transactions as t', 't.id', 'e.transaction_id')
+      .select(sql<number>`count(*)`.as('total'))
+      .where('e.account_id', '=', accountId)
+      .$if(Boolean(referenceType), (qb) => qb.where('t.reference_type', '=', referenceType!))
+      .executeTakeFirstOrThrow();
+
+    return Number(row.total);
+  }
+
   async getHistory(
     accountId: string,
     options: { limit: number; cursor?: number; referenceType?: string } = { limit: 50 },

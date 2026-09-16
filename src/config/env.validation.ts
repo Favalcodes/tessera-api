@@ -33,8 +33,14 @@ export const envSchema = z
 
     /** How long bets are accepted before a round locks and takes off. */
     ROUND_BETTING_WINDOW_MS: z.coerce.number().int().min(1_000).default(15_000),
-    /** Pause between one round settling and the next opening. */
-    ROUND_INTERMISSION_MS: z.coerce.number().int().min(0).default(4_000),
+    /**
+     * Pause between one round settling and the next opening.
+     *
+     * Must comfortably exceed the client's landing animation, or the result is
+     * replaced by the next betting window before anyone can read it. At 4s the
+     * roulette result rested for about a second and a half.
+     */
+    ROUND_INTERMISSION_MS: z.coerce.number().int().min(0).default(9_000),
     /**
      * How long a roulette wheel spins. Presentation only — the pocket is drawn
      * when the round opens, exactly as the crash point is.
