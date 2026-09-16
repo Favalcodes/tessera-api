@@ -24,7 +24,8 @@
     "db:status": "./scripts/db.sh status",
     "db:psql": "./scripts/db.sh psql",
     "db:reset": "./scripts/db.sh reset && pnpm migrate",
-    "build:contracts": "pnpm --filter @tessera/contracts build"
+    "build:contracts": "pnpm --filter @tessera/contracts build",
+    "admin:grant": "./scripts/grant-admin.sh"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
