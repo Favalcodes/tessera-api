@@ -38,10 +38,10 @@ write an unbalanced transaction, edit a historical posting, or drive a wallet ne
 | 1 | Double-entry ledger, auth, invariant tests | **Done** |
 | 2 | Round engine, atomic betting, cash-out, load tests | **Done** |
 | 3 | WebSocket layer, live UI | **Done** |
-| 4 | Hash-chain provable fairness, admin dashboard | Next |
+| 4 | Hash-chain provable fairness, admin dashboard | **Done** |
 | 5 | Docs, demo, deploy | Not started |
 
-123 tests passing, plus HTTP load and latency harnesses.
+136 tests passing, plus HTTP load and latency harnesses.
 
 ---
 
