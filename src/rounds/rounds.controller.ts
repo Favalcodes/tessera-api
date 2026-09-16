@@ -8,12 +8,23 @@ import type { AccessTokenPayload } from '../common/types/authenticated-request';
 import { CashOutDto } from './dto/cash-out.dto';
 import { PlaceBetDto } from './dto/place-bet.dto';
 import { BetResponseDto, RoundResponseDto } from './dto/round-response.dto';
+import { FairnessService } from './fairness.service';
 import { RoundsService } from './rounds.service';
 
 @ApiTags('rounds')
 @Controller('rounds')
 export class RoundsController {
-  constructor(private readonly rounds: RoundsService) {}
+  constructor(
+    private readonly rounds: RoundsService,
+    private readonly fairness: FairnessService,
+  ) {}
+
+  @Public()
+  @Get('fairness/chains')
+  @ApiOperation({ summary: 'Every published chain commitment, oldest first' })
+  chains() {
+    return this.fairness.listChains();
+  }
 
   @Public()
   @Get('current')
@@ -29,6 +40,13 @@ export class RoundsController {
   @ApiOkResponse({ type: RoundResponseDto })
   byId(@Param('id', ParseUUIDPipe) id: string): Promise<RoundView> {
     return this.rounds.getRound(id);
+  }
+
+  @Public()
+  @Get(':id/fairness')
+  @ApiOperation({ summary: 'Everything needed to verify this round independently' })
+  fairnessProof(@Param('id', ParseUUIDPipe) id: string) {
+    return this.fairness.getProof(id);
   }
 
   @Get(':id/bets')

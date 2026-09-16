@@ -87,6 +87,20 @@ export interface RoundsTable {
   crashed_at: NullableTimestamp;
   settled_at: NullableTimestamp;
   created_at: CreatedAt;
+  /** Which committed chain this round's seed came from. */
+  chain_id: string | null;
+  /** Its position in that chain: round `i` uses `s[i]`. */
+  chain_index: number | null;
+}
+
+export interface FairnessChainsTable {
+  id: Generated<string>;
+  genesis_hash: string;
+  /** Secret. Never select this into an API response. */
+  terminal_seed: string;
+  length: number;
+  first_nonce: number;
+  created_at: CreatedAt;
 }
 
 export interface BetsTable {
@@ -110,6 +124,7 @@ export interface DB {
   balances: BalancesTable;
   refresh_tokens: RefreshTokensTable;
   rounds: RoundsTable;
+  fairness_chains: FairnessChainsTable;
   bets: BetsTable;
 }
 

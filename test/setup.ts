@@ -19,5 +19,8 @@ process.env.THROTTLE_ENABLED = 'false';
 // default of 10, 40 "simultaneous" requests queue behind the pool and mostly
 // run in sequence — which makes the race tests pass for the wrong reason.
 process.env.DATABASE_POOL_MAX = '40';
+// No pause between rounds in tests: specs drive the engine explicitly, and a
+// real intermission would just make openRoundIfDue return null mid-assertion.
+process.env.ROUND_INTERMISSION_MS = '0';
 
 jest.setTimeout(30_000);

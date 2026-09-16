@@ -19,6 +19,10 @@ export interface RoundOutcome {
   seed: string;
   /** Derived deterministically from the seed and the round's nonce. */
   crashPointBp: number;
+  /** Which committed chain this seed came from, when the provider uses one. */
+  chainId?: string;
+  /** Its position in that chain: round `i` uses `s[i]`. */
+  chainIndex?: number;
 }
 
 export interface FairnessProvider {

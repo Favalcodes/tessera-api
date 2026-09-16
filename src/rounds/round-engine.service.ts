@@ -192,6 +192,8 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
           seed_hash: outcome.seedHash,
           seed_revealed: null,
           crash_point_bp: outcome.crashPointBp,
+          chain_id: outcome.chainId ?? null,
+          chain_index: outcome.chainIndex ?? null,
           locks_at: new Date(Date.now() + bettingWindow),
         })
         .returning(['id', 'nonce'])

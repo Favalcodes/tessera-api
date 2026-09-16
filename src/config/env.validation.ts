@@ -42,6 +42,11 @@ export const envSchema = z
      * was not running.
      */
     ROUND_STALE_GRACE_MS: z.coerce.number().int().min(500).default(5_000),
+    /**
+     * Rounds covered by one committed fairness chain. Deriving a seed costs
+     * `length - index` hashes, so even 100,000 is microseconds.
+     */
+    FAIRNESS_CHAIN_LENGTH: z.coerce.number().int().min(10).default(10_000),
     MIN_STAKE_MINOR: z.coerce.number().int().positive().default(100),
     MAX_STAKE_MINOR: z.coerce.number().int().positive().default(1_000_000),
 
