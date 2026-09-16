@@ -25,7 +25,8 @@
     "db:psql": "./scripts/db.sh psql",
     "db:reset": "./scripts/db.sh reset && pnpm migrate",
     "build:contracts": "pnpm --filter @tessera/contracts build",
-    "admin:grant": "./scripts/grant-admin.sh"
+    "admin:grant": "./scripts/grant-admin.sh",
+    "seed:demo": "ROUND_INTERMISSION_MS=0 ts-node -r tsconfig-paths/register scripts/seed-demo.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
@@ -75,6 +76,7 @@
     "supertest": "^7.1.4",
     "ts-jest": "^29.4.1",
     "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0"
   }

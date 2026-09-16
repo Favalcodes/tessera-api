@@ -57,6 +57,8 @@ pnpm db:up        # starts a dedicated user-owned cluster on 127.0.0.1:5434
 pnpm migrate
 pnpm start:dev    # http://localhost:3010, API docs at /docs
 pnpm test
+
+pnpm seed:demo    # optional: populate players and play 24 rounds
 ```
 
 `pnpm db:up` runs its own Postgres cluster under `~/.tessera`, separate from any system
@@ -71,7 +73,56 @@ at `/Library/PostgreSQL/17/bin`.
 | `pnpm db:reset` | Back up, drop and recreate the database, re-migrate. **Refuses while accounts exist** — `FORCE=1` to override |
 | `./scripts/db.sh backup` | Dump the database to `~/.tessera/backups/` |
 | `FORCE=1 ./scripts/db.sh destroy` | Remove the whole cluster. Never run automatically |
+| `pnpm seed:demo` | Play 24 rounds through the real services so the demo is not empty |
+| `pnpm admin:grant <email>` | Promote an account to operator |
 | `pnpm typecheck` / `lint` / `test` / `build` | What CI runs |
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph client["tessera-web"]
+        UI["Crash · Roulette · Ledger · Verify"]
+    end
+
+    subgraph api["tessera-api"]
+        HTTP["REST — bets, cash-outs, history<br/>idempotency keys, exact status codes"]
+        GW["Socket.IO gateway<br/>the only code that knows a socket exists"]
+        ENG["Round engine<br/>leader-elected, no transport dependencies"]
+        BET["Betting service<br/>row locks, conditional settlement"]
+        LED["Ledger service<br/>the only writer of postings"]
+        FAIR["Fairness provider<br/>pre-committed hash chain"]
+    end
+
+    subgraph pg["PostgreSQL"]
+        CONSTRAINTS["Constraints carry the guarantees:<br/>zero-sum · append-only · non-negative"]
+        NOTIFY["LISTEN/NOTIFY<br/>transactional fan-out"]
+        LOCK["Advisory lock<br/>single-writer election"]
+    end
+
+    UI -->|"money moves over HTTP"| HTTP
+    GW -.->|"state flows outward only"| UI
+    HTTP --> BET
+    ENG --> FAIR
+    ENG --> BET
+    BET --> LED
+    LED --> CONSTRAINTS
+    ENG --> LOCK
+    BET -->|"publishes inside the transaction"| NOTIFY
+    NOTIFY --> GW
+```
+
+Two things this diagram is making a point of.
+
+**The engine has no arrow to the gateway.** It publishes domain events and has no idea
+anything is listening, which is why every concurrency test runs without a socket client
+anywhere near it.
+
+**Money moves over HTTP, state flows back over the socket.** Bets and cash-outs need
+idempotency keys, precise status codes and safe retries; a dropped socket would leave a
+client unable to tell whether its bet landed.
 
 ---
 
@@ -296,21 +347,62 @@ over the socket** — bets and cash-outs stay on HTTP, because they need idempot
 precise status codes and retry semantics, and a dropped socket leaves a client unable to
 tell whether its bet landed.
 
-### Fairness today
+## Provable fairness
 
-A round draws a random seed when it opens, publishes `sha256(seed)`, and reveals the seed
-once it crashes. Both the crash point and the seed are withheld from every API response
-until then, and a database constraint refuses a revealed seed on a round that has not
-crashed — so the ordering is enforced, not merely intended.
+The claim is that an outcome could not have been chosen to suit the bets — and it is
+checkable by anyone, without trusting this server.
 
-The honest limitation, which is why Phase 4 exists: this proves the server did not change
-its mind *after* seeing the bets, but not that it did not draw many seeds and publish a
-favourable one beforehand. A pre-committed hash chain closes that gap.
+### How it works, in plain terms
 
-The house edge is ~1.4% — a 1-in-101 instant bust, plus the draw's own mass at 1.00x and
-two-decimal truncation. Measured over 200,000 rounds, a player cashing out at any fixed
-multiplier returns ~98.6% of stake. It is published as a constant because a hidden edge is
-precisely what provable fairness exists to rule out.
+Before the very first round runs, the server picks a secret at random and hashes it
+thousands of times, building a chain backwards:
+
+```
+  s[10000] = random secret
+  s[9999]  = sha256(s[10000])
+  s[9998]  = sha256(s[9999])
+  ...
+  s[0]     = sha256(s[1])        <- published before anyone can bet
+```
+
+`s[0]` is published first. Round 1 uses `s[1]`, round 2 uses `s[2]`, and each seed is
+revealed once its round ends.
+
+The reason this proves anything: **sha256 cannot be run backwards.** Hashing a revealed
+seed forward lands you on the genesis published before a single bet existed. To fake a
+round, the server would have to find a different seed that still hashes to the same
+commitment — which is the thing sha256 is designed to make infeasible. The entire
+sequence of outcomes was fixed before the first player arrived.
+
+Every round links to a verification page that recomputes all three checks in your
+browser with Web Crypto: the seed matches the commitment, the outcome follows from the
+seed, and the seed hashes back to the genesis. The server is asked for the proof once and
+then not consulted again — asking it whether it was honest would prove nothing.
+
+### Why a chain rather than commit-and-reveal
+
+Publishing a hash before each round and revealing it after is the common approach, and it
+is weaker. It proves the server did not change its mind *after* seeing the bets. It does
+not prove the server did not draw a hundred seeds beforehand and publish whichever one it
+liked. A chain closes that, because every seed is determined by the one after it, all the
+way back to a commitment made before the first round.
+
+Chains are finite. An exhausted one is succeeded by another whose genesis is committed
+before its first round, and every commitment is listed at `/rounds/fairness/chains` —
+because silently rolling into a fresh chain would hand the operator back exactly the
+freedom the chain removes.
+
+### The house edge, stated
+
+| Game | Edge | Where it comes from |
+|---|---|---|
+| Crash | ~1.4% | A 1-in-101 instant bust, plus the draw's own mass at 1.00x and two-decimal truncation |
+| Roulette | 2.70% | The single zero, and nothing else |
+
+Both measured over 200,000 outcomes derived from real hashes, not asserted from theory.
+A crash player cashing out at any fixed multiplier returns ~98.6% of stake; every roulette
+bet type returns 97.3%. Published as constants, because a hidden edge is precisely what
+provable fairness exists to rule out.
 
 ---
 
@@ -444,6 +536,57 @@ product. Prisma's schema language cannot express a deferred constraint trigger, 
 append-only guard, or a conditional non-negative check, so they would have been unmanaged
 raw SQL regardless. Kysely keeps full type safety while `SELECT ... FOR UPDATE` and
 advisory locks — both load-bearing in Phase 2 — stay first-class and visible.
+
+---
+
+## What I would do differently at real-money scale
+
+The point of this section is that the build stops somewhere deliberate, and I know where.
+
+**Tokens would leave localStorage.** A refresh token reachable from JavaScript is
+reachable by any XSS. Real money means an httpOnly, `SameSite=Strict` cookie set by the
+API, with the access token held only in memory. That change also lets the dashboard render
+server-side and removes the one lint exemption in the web app.
+
+**The balances cache would stop being a cache I maintain by hand.** Today
+`LedgerService.post` updates it in the same transaction as the postings. That is correct,
+but it is a second place that can be wrong. At scale I would make it a materialised view
+refreshed transactionally, or drop it entirely and read `sum(amount)` against a covering
+index — and measure before choosing, rather than assume the cache is faster.
+
+**Settlement would move out of the request path.** A round with fifty thousand bets
+settles in one transaction here, which holds locks for as long as that takes. It would
+become a batched, resumable job keyed by round, so a crash mid-settlement resumes rather
+than rolls back the lot.
+
+**The engine's single-writer lock would need a story for lock loss.** A Postgres advisory
+lock is released if the connection dies, which is what makes it safe — but a leader that
+is merely *slow* still holds it. I would add a heartbeat the leader must keep writing, and
+have it stand down if it cannot.
+
+**`pg_notify` would probably not survive.** It is transactional, which is genuinely
+valuable, and it is not durable. At volume I would keep the transactional publish but write
+to an outbox table and have a relay drain it, so a client that was disconnected for a
+second does not silently miss a settlement.
+
+**Idempotency keys would get a TTL and a stored response.** Today a replay re-reads the
+bet. That is correct but only because a bet is cheap to look up; a general idempotency
+layer stores the original response body and expires it.
+
+**KYC, AML and responsible-gambling controls would exist at all.** `AccountStatusGuard` is
+a seam, not an implementation. Real money means identity verification, sanctions screening,
+deposit limits, self-exclusion, and jurisdiction-by-jurisdiction rules about what may be
+offered to whom. That is not a feature I have stubbed — it is a body of work larger than
+everything here.
+
+**Money would stop being a JavaScript number.** Integer minor units in a `BIGINT` are
+exact well past any plausible balance, and the `Money` type refuses anything unsafe. But a
+system handling many currencies wants an explicit currency on every posting and a decimal
+type that cannot be coerced to a float by accident.
+
+**The load tests would run continuously, not on demand.** The numbers quoted above are
+from a run on a laptop. They belong in CI on a fixed machine, tracked over time, so a
+regression in the concurrency path shows up as a graph rather than a surprise.
 
 ---
 
