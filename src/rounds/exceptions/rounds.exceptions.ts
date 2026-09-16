@@ -21,11 +21,27 @@ export class RoundNotOpenError extends Error {
   }
 }
 
-/** Cash-out attempted on a round that is not in flight. */
-export class RoundNotFlyingError extends Error {
+/** Cash-out attempted on a round that is not running. */
+export class RoundNotRunningError extends Error {
   constructor(readonly status: string) {
     super(`Cannot cash out: the round is ${status}`);
-    this.name = 'RoundNotFlyingError';
+    this.name = 'RoundNotRunningError';
+  }
+}
+
+/** A selection was supplied for crash, or omitted for roulette. */
+export class InvalidSelectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidSelectionError';
+  }
+}
+
+/** Cash-out attempted on a roulette bet, which has no such action. */
+export class GameDoesNotSupportCashOutError extends Error {
+  constructor(readonly game: string) {
+    super(`${game} bets are settled when the round resolves; there is nothing to cash out`);
+    this.name = 'GameDoesNotSupportCashOutError';
   }
 }
 

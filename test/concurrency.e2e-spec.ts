@@ -206,7 +206,7 @@ describe('Concurrency guarantees', () => {
       // Cash-out is idempotent, so every caller may legitimately succeed — but
       // they must all describe the *same* settlement.
       const payouts = new Set(fulfilled.map((r) => r.value.payoutMinor));
-      const multipliers = new Set(fulfilled.map((r) => r.value.cashoutMultiplierBp));
+      const multipliers = new Set(fulfilled.map((r) => r.value.settledMultiplierBp));
       expect(payouts.size).toBe(1);
       expect(multipliers.size).toBe(1);
 
@@ -260,7 +260,7 @@ describe('Concurrency guarantees', () => {
 
         if (cashOutResult.status === 'fulfilled') {
           // Won the race: paid, and recorded as cashed out.
-          expect(finalBet.status).toBe('CASHED_OUT');
+          expect(finalBet.status).toBe('WON');
           expect(balance).toBe(GRANT - 10_000 + finalBet.payoutMinor!);
         } else {
           // Lost the race: written off, and not paid a thing.

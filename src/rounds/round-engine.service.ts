@@ -6,9 +6,17 @@ import {
   type OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { elapsedAtMultiplier, TICK_MS } from '@tessera/contracts';
+import {
+  elapsedAtMultiplier,
+  GameKind,
+  roulettePocketFromHash,
+  selectionWins,
+  TICK_MS,
+  type RouletteBetType,
+} from '@tessera/contracts';
+import { createHmac } from 'node:crypto';
 import { sql, type Transaction } from 'kysely';
-import { Money } from '../common/value-objects/money';
+import { BasisPoints, Money } from '../common/value-objects/money';
 import type { Env } from '../config/env.validation';
 import { DatabaseService } from '../database/database.service';
 import { SYSTEM_ACCOUNTS, type DB } from '../database/database.types';
@@ -98,15 +106,24 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
    * late, early or twice does the same thing.
    */
   async tick(): Promise<void> {
+    // Both tables run at once. They share a lifecycle and an engine; only the
+    // outcome and the settlement differ.
+    for (const game of [GameKind.CRASH, GameKind.ROULETTE]) {
+      await this.tickGame(game);
+    }
+  }
+
+  private async tickGame(game: GameKind): Promise<void> {
     const live = await this.db
       .selectFrom('rounds')
       .selectAll()
-      .where('status', 'in', ['OPEN', 'LOCKED', 'FLYING', 'CRASHED'])
+      .where('game', '=', game)
+      .where('status', 'in', ['OPEN', 'LOCKED', 'RUNNING', 'RESOLVED'])
       .orderBy('nonce', 'desc')
       .executeTakeFirst();
 
     if (!live) {
-      await this.openRoundIfDue();
+      await this.openRoundIfDue(game);
       return;
     }
 
@@ -121,11 +138,17 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
         await this.startRound(live.id);
         return;
 
-      case 'FLYING': {
+      case 'RUNNING': {
         if (!live.started_at) return;
 
         const elapsed = now - live.started_at.getTime();
-        const crashAfterMs = elapsedAtMultiplier(live.crash_point_bp);
+        // Crash runs until the curve reaches its drawn crash point. Roulette
+        // runs for a fixed spin: the pocket was decided when the round opened,
+        // so the duration is presentation, not outcome.
+        const crashAfterMs =
+          live.game === GameKind.CRASH
+            ? elapsedAtMultiplier(live.crash_point_bp ?? 0)
+            : this.config.get('ROULETTE_SPIN_MS', { infer: true });
         const grace = this.config.get('ROUND_STALE_GRACE_MS', { infer: true });
 
         // Far past the crash point means nobody was resolving this round — the
@@ -138,12 +161,12 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
         }
 
         if (elapsed >= crashAfterMs) {
-          await this.crashRound(live.id);
+          await this.resolveRound(live.id);
         }
         return;
       }
 
-      case 'CRASHED':
+      case 'RESOLVED':
         await this.settleRound(live.id);
         return;
     }
@@ -165,13 +188,14 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
    * round crashes. Deciding it up front is what makes the fairness claim
    * meaningful — the outcome cannot respond to how people bet.
    */
-  async openRoundIfDue(): Promise<string | null> {
+  async openRoundIfDue(game: GameKind = GameKind.CRASH): Promise<string | null> {
     const intermission = this.config.get('ROUND_INTERMISSION_MS', { infer: true });
 
     const lastSettled = await this.db
       .selectFrom('rounds')
       .select(['settled_at'])
-      .where('status', '=', 'SETTLED')
+      .where('game', '=', game)
+      .where('status', 'in', ['SETTLED', 'VOIDED'])
       .orderBy('nonce', 'desc')
       .executeTakeFirst();
 
@@ -184,14 +208,26 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
     const outcome = await this.fairness.drawOutcome(nextNonce);
     const bettingWindow = this.config.get('ROUND_BETTING_WINDOW_MS', { infer: true });
 
+    // Both outcomes come from the same committed seed. Roulette's pocket is
+    // derived from the same HMAC the crash point uses, so one chain covers both
+    // tables and a player verifies either the same way.
+    const pocket =
+      game === GameKind.ROULETTE
+        ? roulettePocketFromHash(
+            createHmac('sha256', outcome.seed).update(String(nextNonce)).digest('hex'),
+          )
+        : null;
+
     try {
       const round = await this.db
         .insertInto('rounds')
         .values({
+          game,
           seed: outcome.seed,
           seed_hash: outcome.seedHash,
           seed_revealed: null,
-          crash_point_bp: outcome.crashPointBp,
+          crash_point_bp: game === GameKind.CRASH ? outcome.crashPointBp : null,
+          winning_pocket: pocket,
           chain_id: outcome.chainId ?? null,
           chain_index: outcome.chainIndex ?? null,
           locks_at: new Date(Date.now() + bettingWindow),
@@ -200,14 +236,14 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
         .executeTakeFirstOrThrow();
 
       await this.events.publish({ type: 'round.state', roundId: round.id });
-      this.logger.log(`Round ${round.nonce} open for ${bettingWindow}ms`);
+      this.logger.log(`${game} round ${round.nonce} open for ${bettingWindow}ms`);
       return round.id;
     } catch (error) {
       // The partial unique index permits only one live round. If a second
       // process somehow got this far, it loses here rather than creating a
       // duplicate — the database is the backstop for leader election.
-      if (isUniqueViolation(error, 'rounds_single_live_round')) {
-        this.logger.warn('A live round already exists; not opening another');
+      if (isUniqueViolation(error, 'rounds_single_live_round_per_game')) {
+        this.logger.warn(`A live ${game} round already exists; not opening another`);
         return null;
       }
       throw error;
@@ -242,7 +278,7 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
     await this.db.transaction().execute(async (trx) => {
       const changed = await trx
         .updateTable('rounds')
-        .set({ status: 'FLYING', started_at: sql<Date>`clock_timestamp()` })
+        .set({ status: 'RUNNING', started_at: sql<Date>`clock_timestamp()` })
         .where('id', '=', roundId)
         .where('status', '=', 'LOCKED')
         .executeTakeFirst();
@@ -260,10 +296,10 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
    * a revealed seed on a round that has not crashed, so this ordering is
    * enforced rather than merely intended.
    */
-  async crashRound(roundId: string): Promise<void> {
+  async resolveRound(roundId: string): Promise<void> {
     const round = await this.db
       .selectFrom('rounds')
-      .select(['nonce', 'crash_point_bp', 'seed'])
+      .select(['nonce', 'game', 'crash_point_bp', 'winning_pocket', 'seed'])
       .where('id', '=', roundId)
       .executeTakeFirstOrThrow();
 
@@ -271,14 +307,14 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
       const changed = await trx
         .updateTable('rounds')
         .set({
-          status: 'CRASHED',
-          crashed_at: sql<Date>`clock_timestamp()`,
+          status: 'RESOLVED',
+          resolved_at: sql<Date>`clock_timestamp()`,
           // The reveal. Copying the committed seed across is what a player checks
           // against the hash published before they bet.
           seed_revealed: round.seed,
         })
         .where('id', '=', roundId)
-        .where('status', '=', 'FLYING')
+        .where('status', '=', 'RUNNING')
         .executeTakeFirst();
 
       if (changed.numUpdatedRows === 1n) {
@@ -287,7 +323,9 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
     });
 
     this.logger.log(
-      `Round ${round.nonce} crashed at ${(round.crash_point_bp / 10_000).toFixed(2)}x`,
+      round.game === GameKind.CRASH
+        ? `Crash round ${round.nonce} resolved at ${((round.crash_point_bp ?? 0) / 10_000).toFixed(2)}x`
+        : `Roulette round ${round.nonce} landed on ${round.winning_pocket}`,
     );
   }
 
@@ -302,33 +340,39 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
     await this.db.transaction().execute(async (trx) => {
       const round = await trx
         .selectFrom('rounds')
-        .select(['id', 'nonce', 'status'])
+        .select(['id', 'nonce', 'status', 'game', 'winning_pocket'])
         .where('id', '=', roundId)
         .forUpdate()
         .executeTakeFirst();
 
-      if (!round || round.status !== 'CRASHED') return;
+      if (!round || round.status !== 'RESOLVED') return;
 
       // Locked before settling, so a cash-out arriving mid-resolution either
       // lands first and is skipped here, or blocks and finds the bet already
       // LOST. It can never be both paid and written off.
       const activeBets = await trx
         .selectFrom('bets')
-        .select(['id', 'user_id', 'stake_minor'])
+        .selectAll()
         .where('round_id', '=', roundId)
         .where('status', '=', 'ACTIVE')
         .forUpdate()
         .execute();
 
       for (const bet of activeBets) {
-        await this.settleLostBet(trx, bet);
+        if (round.game === GameKind.ROULETTE) {
+          await this.settleRouletteBet(trx, bet, round.winning_pocket ?? 0);
+        } else {
+          // Crash: anyone still in at the crash has lost. Winners left earlier,
+          // by cashing out.
+          await this.settleLostBet(trx, bet);
+        }
       }
 
       await trx
         .updateTable('rounds')
         .set({ status: 'SETTLED', settled_at: sql<Date>`clock_timestamp()` })
         .where('id', '=', roundId)
-        .where('status', '=', 'CRASHED')
+        .where('status', '=', 'RESOLVED')
         .execute();
 
       await this.events.publish({ type: 'round.state', roundId }, trx);
@@ -448,6 +492,114 @@ export class RoundEngineService implements OnApplicationBootstrap, OnModuleDestr
 
     await this.events.publish({ type: 'bet.settled', userId, bet: toBetView(row) }, trx);
     await this.events.publish({ type: 'wallet.updated', userId, balanceMinor: balance }, trx);
+  }
+
+  /**
+   * Settle one roulette bet against the pocket that came up.
+   *
+   * Every bet on the table is evaluated by the same shared rules the client uses
+   * to price it, so a player can predict the settlement exactly. Winners are
+   * paid their stake back out of escrow plus profit from the house; losers'
+   * stakes move from escrow to the house, exactly as in crash.
+   */
+  private async settleRouletteBet(
+    trx: Transaction<DB>,
+    bet: {
+      id: string;
+      user_id: string;
+      stake_minor: number;
+      selection_type: string | null;
+      selection_value: string | null;
+      odds_bp: number | null;
+    },
+    pocket: number,
+  ): Promise<void> {
+    const selection = {
+      type: bet.selection_type as RouletteBetType,
+      ...(bet.selection_value === null ? {} : { value: Number(bet.selection_value) }),
+    };
+
+    if (!bet.selection_type || bet.odds_bp === null || !selectionWins(selection, pocket)) {
+      await this.settleLostBet(trx, bet);
+      return;
+    }
+
+    const stake = Money.fromMinor(bet.stake_minor);
+    // Paid at the odds stored on the bet, not at today's odds table.
+    const payout = Money.applyMultiplier(stake, BasisPoints.fromRaw(bet.odds_bp));
+    const profit = Money.sub(payout, stake);
+
+    await trx
+      .updateTable('bets')
+      .set({
+        status: 'WON',
+        settled_multiplier_bp: bet.odds_bp,
+        payout_minor: payout,
+        settled_at: sql<Date>`clock_timestamp()`,
+      })
+      .where('id', '=', bet.id)
+      .where('status', '=', 'ACTIVE')
+      .execute();
+
+    const walletId = await this.ledger.getWalletAccountId(bet.user_id, trx);
+
+    const postings = [
+      { accountId: SYSTEM_ACCOUNTS.ESCROW, amount: Money.negate(stake) },
+      { accountId: walletId, amount: stake },
+    ];
+
+    if (Money.isPositive(profit)) {
+      postings.push(
+        { accountId: SYSTEM_ACCOUNTS.HOUSE, amount: Money.negate(profit) },
+        { accountId: walletId, amount: profit },
+      );
+    }
+
+    await this.ledger.post(
+      {
+        kind: TransactionKind.BET_CASHOUT,
+        reference: { type: 'bet', id: bet.id },
+        postings,
+      },
+      trx,
+    );
+
+    const displayName = await this.displayNameOf(trx, bet.user_id);
+
+    await this.events.publish(
+      {
+        type: 'bet.won',
+        roundId: (await this.roundIdOf(trx, bet.id)) ?? '',
+        game: GameKind.ROULETTE,
+        betId: bet.id,
+        displayName,
+        stakeMinor: bet.stake_minor,
+        selection: { type: selection.type, ...(selection.value === undefined ? {} : { value: selection.value }) },
+        settledMultiplierBp: bet.odds_bp,
+        payoutMinor: payout,
+      },
+      trx,
+    );
+
+    await this.publishBetOutcome(trx, bet.id, bet.user_id, walletId);
+  }
+
+  private async displayNameOf(trx: Transaction<DB>, userId: string): Promise<string> {
+    const row = await trx
+      .selectFrom('users')
+      .select(['display_name'])
+      .where('id', '=', userId)
+      .executeTakeFirst();
+    return row?.display_name ?? 'Player';
+  }
+
+  private async roundIdOf(trx: Transaction<DB>, betId: string): Promise<string | null> {
+    const row = await trx
+      .selectFrom('bets')
+      .select(['round_id'])
+      .where('id', '=', betId)
+      .executeTakeFirst();
+    return row?.round_id ?? null;
   }
 
   private async settleLostBet(

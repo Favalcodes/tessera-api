@@ -36,6 +36,11 @@ export const envSchema = z
     /** Pause between one round settling and the next opening. */
     ROUND_INTERMISSION_MS: z.coerce.number().int().min(0).default(4_000),
     /**
+     * How long a roulette wheel spins. Presentation only — the pocket is drawn
+     * when the round opens, exactly as the crash point is.
+     */
+    ROULETTE_SPIN_MS: z.coerce.number().int().min(500).default(6_000),
+    /**
      * How far past its crash point a flying round may sit before the engine
      * treats it as abandoned and voids it. A healthy engine resolves a round
      * within one 100ms tick, so anything beyond a few seconds means the engine

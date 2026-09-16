@@ -194,11 +194,11 @@ describe('Real-time layer', () => {
     const watcher = connect();
     await next<RoundStatePayload>(watcher, ServerEvent.ROUND_STATE);
 
-    const cashedOut = next<PublicBetPayload>(watcher, ServerEvent.BET_CASHED_OUT);
+    const cashedOut = next<PublicBetPayload>(watcher, ServerEvent.BET_WON);
     const settled = await rounds.cashOut({ userId: user.id, betId: bet.id });
 
     const payload = await cashedOut;
-    expect(payload.cashoutMultiplierBp).toBe(settled.cashoutMultiplierBp);
+    expect(payload.settledMultiplierBp).toBe(settled.settledMultiplierBp);
     expect(payload.payout).toBe(settled.payout);
   });
 

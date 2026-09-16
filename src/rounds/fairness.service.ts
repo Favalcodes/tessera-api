@@ -38,7 +38,7 @@ export class FairnessService {
 
     if (!round) throw new RoundNotFoundError(roundId);
 
-    const concluded = round.status === 'CRASHED' || round.status === 'SETTLED';
+    const concluded = round.status === 'RESOLVED' || round.status === 'SETTLED';
     const revealed = concluded || round.status === 'VOIDED';
 
     return {

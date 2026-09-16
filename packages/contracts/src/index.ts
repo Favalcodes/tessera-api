@@ -8,3 +8,4 @@ export * from './fairness.types';
 export * from './ledger.types';
 export * from './money';
 export * from './round.types';
+export * from './roulette';

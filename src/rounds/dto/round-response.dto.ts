@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class RoundResponseDto {
   @ApiProperty() id!: string;
-  @ApiProperty({ enum: ['OPEN', 'LOCKED', 'FLYING', 'CRASHED', 'SETTLED'] }) status!: string;
+  @ApiProperty({ enum: ['OPEN', 'LOCKED', 'RUNNING', 'RESOLVED', 'SETTLED'] }) status!: string;
 
   @ApiProperty({ description: 'sha256 of the seed, published before betting opens' })
   seedHash!: string;
@@ -16,7 +16,7 @@ export class RoundResponseDto {
   @ApiProperty() opensAt!: string;
   @ApiProperty() locksAt!: string;
   @ApiProperty({ nullable: true }) startedAt!: string | null;
-  @ApiProperty({ nullable: true }) crashedAt!: string | null;
+  @ApiProperty({ nullable: true }) resolvedAt!: string | null;
 
   @ApiProperty({ description: 'Server clock, so a client can correct for skew' })
   serverTime!: string;
@@ -27,8 +27,8 @@ export class BetResponseDto {
   @ApiProperty() roundId!: string;
   @ApiProperty() stakeMinor!: number;
   @ApiProperty() stake!: string;
-  @ApiProperty({ enum: ['ACTIVE', 'CASHED_OUT', 'LOST', 'VOIDED'] }) status!: string;
-  @ApiProperty({ nullable: true }) cashoutMultiplierBp!: number | null;
+  @ApiProperty({ enum: ['ACTIVE', 'WON', 'LOST', 'VOIDED'] }) status!: string;
+  @ApiProperty({ nullable: true }) settledMultiplierBp!: number | null;
   @ApiProperty({ nullable: true }) payoutMinor!: number | null;
   @ApiProperty({ nullable: true }) payout!: string | null;
   @ApiProperty() createdAt!: string;

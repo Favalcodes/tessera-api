@@ -22,9 +22,11 @@ import {
   BetAlreadySettledError,
   CashOutTooLateError,
   DuplicateBetError,
+  GameDoesNotSupportCashOutError,
+  InvalidSelectionError,
   NoActiveRoundError,
   NoBetOnRoundError,
-  RoundNotFlyingError,
+  RoundNotRunningError,
   RoundNotFoundError,
   RoundNotOpenError,
   StakeOutOfRangeError,
@@ -135,7 +137,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     if (
       exception instanceof RoundNotOpenError ||
-      exception instanceof RoundNotFlyingError ||
+      exception instanceof RoundNotRunningError ||
       exception instanceof CashOutTooLateError ||
       exception instanceof BetAlreadySettledError ||
       exception instanceof DuplicateBetError
@@ -143,8 +145,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return { status: HttpStatus.CONFLICT, error: exception.name, message: exception.message };
     }
 
-    if (exception instanceof StakeOutOfRangeError) {
+    // A malformed or missing selection is the client's mistake to fix, so 400.
+    if (exception instanceof StakeOutOfRangeError || exception instanceof InvalidSelectionError) {
       return { status: HttpStatus.BAD_REQUEST, error: exception.name, message: exception.message };
+    }
+
+    // Cashing out of roulette is a well-formed request the game does not offer.
+    if (exception instanceof GameDoesNotSupportCashOutError) {
+      return { status: HttpStatus.CONFLICT, error: exception.name, message: exception.message };
     }
 
     // An unbalanced transaction reaching this layer means a bug in the calling

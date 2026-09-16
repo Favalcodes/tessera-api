@@ -69,22 +69,27 @@ export interface RefreshTokensTable {
   created_at: CreatedAt;
 }
 
-export type RoundStatusDb = 'OPEN' | 'LOCKED' | 'FLYING' | 'CRASHED' | 'SETTLED' | 'VOIDED';
-export type BetStatusDb = 'ACTIVE' | 'CASHED_OUT' | 'LOST' | 'VOIDED';
+export type RoundStatusDb = 'OPEN' | 'LOCKED' | 'RUNNING' | 'RESOLVED' | 'SETTLED' | 'VOIDED';
+export type GameKindDb = 'CRASH' | 'ROULETTE';
+export type BetStatusDb = 'ACTIVE' | 'WON' | 'LOST' | 'VOIDED';
 
 export interface RoundsTable {
   id: Generated<string>;
   nonce: Generated<number>;
+  game: Generated<GameKindDb>;
   status: Generated<RoundStatusDb>;
   /** Private. Never select this into an API response. */
   seed: string;
   seed_hash: string;
   seed_revealed: string | null;
-  crash_point_bp: number;
+  /** Crash only. */
+  crash_point_bp: number | null;
+  /** Roulette only: 0-36. */
+  winning_pocket: number | null;
   opens_at: Generated<Date>;
   locks_at: ColumnType<Date, Date, Date>;
   started_at: NullableTimestamp;
-  crashed_at: NullableTimestamp;
+  resolved_at: NullableTimestamp;
   settled_at: NullableTimestamp;
   created_at: CreatedAt;
   /** Which committed chain this round's seed came from. */
@@ -109,11 +114,16 @@ export interface BetsTable {
   round_id: string;
   stake_minor: number;
   status: Generated<BetStatusDb>;
-  cashout_multiplier_bp: number | null;
+  settled_multiplier_bp: number | null;
   payout_minor: number | null;
   idempotency_key: string;
   created_at: CreatedAt;
   settled_at: NullableTimestamp;
+  /** Roulette only: what was bet on. */
+  selection_type: string | null;
+  selection_value: string | null;
+  /** Total return multiplier the bet was accepted at, in basis points. */
+  odds_bp: number | null;
 }
 
 export interface DB {

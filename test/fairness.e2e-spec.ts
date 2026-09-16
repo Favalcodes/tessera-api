@@ -70,7 +70,7 @@ describe('Provable fairness: pre-committed hash chain', () => {
       .updateTable('rounds')
       .set({
         started_at: sql<Date>`clock_timestamp() - make_interval(secs => ${
-          elapsedAtMultiplier(round.crash_point_bp) / 1000
+          elapsedAtMultiplier(round.crash_point_bp ?? 0) / 1000
         })`,
       })
       .where('id', '=', roundId)
@@ -168,7 +168,7 @@ describe('Provable fairness: pre-committed hash chain', () => {
     expect(res.body[0]).not.toHaveProperty('terminal_seed');
   });
 
-  it('gives consecutive rounds consecutive, non-repeating chain positions', async () => {
+  it('never issues the same chain position twice', async () => {
     const first = await runRoundToCrash();
     await engine.tick(); // settle, freeing the live-round slot
     const second = await runRoundToCrash();
@@ -176,7 +176,11 @@ describe('Provable fairness: pre-committed hash chain', () => {
     const a = await fairness.getProof(first);
     const b = await fairness.getProof(second);
 
-    expect(b.chainIndex).toBe(a.chainIndex + 1);
+    // Positions advance but are not consecutive per game: both tables draw from
+    // the same chain, so a crash round's neighbours include roulette rounds.
+    // What must hold is that no position is ever reused — a reused seed is a
+    // predictable outcome for anyone who saw the first reveal.
+    expect(b.chainIndex).toBeGreaterThan(a.chainIndex);
     expect(a.seedRevealed).not.toBe(b.seedRevealed);
 
     // Both verify against the same commitment.

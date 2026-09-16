@@ -7,15 +7,27 @@
  *    │ place a bet         │ cash out
  *    └── allowed here      └── allowed here
  */
+/** Which game a round belongs to. Both run concurrently, one round each. */
+export const GameKind = {
+  CRASH: 'CRASH',
+  ROULETTE: 'ROULETTE',
+} as const;
+
+export type GameKind = (typeof GameKind)[keyof typeof GameKind];
+
 export const RoundStatus = {
   /** Accepting bets. */
   OPEN: 'OPEN',
   /** Betting closed; the round has not started climbing yet. */
   LOCKED: 'LOCKED',
-  /** In flight. The multiplier is climbing and cash-outs are accepted. */
-  FLYING: 'FLYING',
-  /** The multiplier hit the crash point. No further cash-outs. */
-  CRASHED: 'CRASHED',
+  /**
+   * The round is running. For crash the multiplier is climbing and cash-outs
+   * are accepted; for roulette the ball is in motion and nothing more can be
+   * done.
+   */
+  RUNNING: 'RUNNING',
+  /** The outcome is known: crash point reached, or pocket determined. */
+  RESOLVED: 'RESOLVED',
   /** Every bet has been resolved and posted to the ledger. */
   SETTLED: 'SETTLED',
   /**
@@ -32,11 +44,14 @@ export const RoundStatus = {
 export type RoundStatus = (typeof RoundStatus)[keyof typeof RoundStatus];
 
 export const BetStatus = {
-  /** Placed, still in the round. */
+  /** Placed, not yet resolved. */
   ACTIVE: 'ACTIVE',
-  /** Cashed out before the crash. */
-  CASHED_OUT: 'CASHED_OUT',
-  /** Still in at the crash. */
+  /**
+   * The bet paid out. Crash: cashed out before the crash, at the multiplier
+   * reached. Roulette: the selection came in, at the odds it was accepted at.
+   */
+  WON: 'WON',
+  /** Crash: still in at the crash. Roulette: the selection did not come in. */
   LOST: 'LOST',
   /** The round could not be resolved; the stake was returned. */
   VOIDED: 'VOIDED',
@@ -46,17 +61,22 @@ export type BetStatus = (typeof BetStatus)[keyof typeof BetStatus];
 
 export interface RoundView {
   id: string;
+  game: GameKind;
   status: RoundStatus;
+  /** Position in the sequence; also the message the outcome is derived from. */
+  nonce: number;
   /** Published before the round starts; the commitment. */
   seedHash: string;
   /** Revealed only once the round has crashed. */
   seedRevealed: string | null;
-  /** Revealed only once the round has crashed. */
+  /** Crash only. Revealed once the round resolves. */
   crashPointBp: number | null;
+  /** Roulette only. Revealed once the round resolves. */
+  winningPocket: number | null;
   opensAt: string;
   locksAt: string;
   startedAt: string | null;
-  crashedAt: string | null;
+  resolvedAt: string | null;
   /** Server time when this view was produced, for client clock-offset handling. */
   serverTime: string;
 }
@@ -64,10 +84,14 @@ export interface RoundView {
 export interface BetView {
   id: string;
   roundId: string;
+  game: GameKind;
+  /** Roulette only: what was bet on, and the odds it was accepted at. */
+  selection: { type: string; value?: number } | null;
+  oddsBp: number | null;
   stakeMinor: number;
   stake: string;
   status: BetStatus;
-  cashoutMultiplierBp: number | null;
+  settledMultiplierBp: number | null;
   payoutMinor: number | null;
   payout: string | null;
   createdAt: string;
@@ -76,6 +100,8 @@ export interface BetView {
 export interface PlaceBetRequest {
   stakeMinor: number;
   idempotencyKey: string;
+  /** Required for roulette, omitted for crash. */
+  selection?: { type: string; value?: number };
 }
 
 export interface CashOutRequest {

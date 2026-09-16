@@ -79,6 +79,7 @@ export class RoundsController {
       roundId: id,
       stakeMinor: dto.stakeMinor,
       idempotencyKey: dto.idempotencyKey,
+      ...(dto.selection ? { selection: dto.selection } : {}),
     });
   }
 

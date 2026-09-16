@@ -31,8 +31,14 @@ export const ServerEvent = {
   ROUND_SYNC: 'round:sync',
   /** Someone placed a bet. Public feed. */
   BET_PLACED: 'bet:placed',
-  /** Someone cashed out. Public feed. */
-  BET_CASHED_OUT: 'bet:cashed_out',
+  /**
+   * Someone's bet paid out. Public feed.
+   *
+   * Crash fires this the moment a player cashes out, which is a live event
+   * others react to. Roulette fires it at settlement, since there is no earlier
+   * moment for it to happen.
+   */
+  BET_WON: 'bet:won',
   /** Your balance changed. Personal room only. */
   WALLET_UPDATED: 'wallet:updated',
   /** One of your bets reached a final state. Personal room only. */
@@ -68,10 +74,13 @@ export interface RoundSyncPayload extends ServerTimestamped {
 export interface PublicBetPayload extends ServerTimestamped {
   betId: string;
   roundId: string;
+  game: string;
   displayName: string;
   stakeMinor: number;
   stake: string;
-  cashoutMultiplierBp?: number;
+  /** Roulette: what they backed. Crash has nothing to name. */
+  selection?: { type: string; value?: number };
+  settledMultiplierBp?: number;
   payoutMinor?: number;
   payout?: string;
 }
@@ -90,7 +99,7 @@ export interface ServerToClientEvents {
   [ServerEvent.ROUND_STATE]: (payload: RoundStatePayload) => void;
   [ServerEvent.ROUND_SYNC]: (payload: RoundSyncPayload) => void;
   [ServerEvent.BET_PLACED]: (payload: PublicBetPayload) => void;
-  [ServerEvent.BET_CASHED_OUT]: (payload: PublicBetPayload) => void;
+  [ServerEvent.BET_WON]: (payload: PublicBetPayload) => void;
   [ServerEvent.WALLET_UPDATED]: (payload: WalletUpdatedPayload) => void;
   [ServerEvent.BET_SETTLED]: (payload: BetSettledPayload) => void;
 }

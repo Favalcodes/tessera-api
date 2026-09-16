@@ -149,21 +149,25 @@ export class RoundsGateway implements OnGatewayInit, OnGatewayConnection, OnModu
             serverTime: new Date().toISOString(),
             betId: event.betId,
             roundId: event.roundId,
+            game: event.game,
             displayName: event.displayName,
             stakeMinor: event.stakeMinor,
             stake: Money.format(Money.fromMinor(event.stakeMinor)),
+            ...(event.selection ? { selection: event.selection } : {}),
           });
           return;
 
-        case 'bet.cashed_out':
-          this.server.to(ROUND_CHANNEL).emit(ServerEvent.BET_CASHED_OUT, {
+        case 'bet.won':
+          this.server.to(ROUND_CHANNEL).emit(ServerEvent.BET_WON, {
             serverTime: new Date().toISOString(),
             betId: event.betId,
             roundId: event.roundId,
+            game: event.game,
             displayName: event.displayName,
             stakeMinor: event.stakeMinor,
             stake: Money.format(Money.fromMinor(event.stakeMinor)),
-            cashoutMultiplierBp: event.cashoutMultiplierBp,
+            ...(event.selection ? { selection: event.selection } : {}),
+            settledMultiplierBp: event.settledMultiplierBp,
             payoutMinor: event.payoutMinor,
             payout: Money.format(Money.fromMinor(event.payoutMinor)),
           });
@@ -192,7 +196,7 @@ export class RoundsGateway implements OnGatewayInit, OnGatewayConnection, OnModu
   private async broadcastSync(): Promise<void> {
     try {
       const round = await this.rounds.getCurrentRound();
-      if (round.status !== 'FLYING' || !round.startedAt) return;
+      if (round.status !== 'RUNNING' || !round.startedAt) return;
 
       this.server.to(ROUND_CHANNEL).emit(ServerEvent.ROUND_SYNC, {
         serverTime: new Date().toISOString(),
@@ -214,10 +218,10 @@ export class RoundsGateway implements OnGatewayInit, OnGatewayConnection, OnModu
   }
 
   private multiplierFor(round: RoundView): number {
-    if (round.status === 'CRASHED' || round.status === 'SETTLED') {
+    if (round.status === 'RESOLVED' || round.status === 'SETTLED') {
       return round.crashPointBp ?? BASIS_POINTS_ONE;
     }
-    if (round.status !== 'FLYING' || !round.startedAt) return BASIS_POINTS_ONE;
+    if (round.status !== 'RUNNING' || !round.startedAt) return BASIS_POINTS_ONE;
 
     return multiplierAtElapsed(Date.now() - new Date(round.startedAt).getTime());
   }

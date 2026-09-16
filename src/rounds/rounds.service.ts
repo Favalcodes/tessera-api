@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  assertValidSelection,
+  describeSelection,
   multiplierAtElapsed,
+  oddsForSelection,
+  RouletteSelectionError,
   type BetView,
+  type GameKind,
   type RoundStatus,
+  type RouletteSelection,
   type RoundView,
 } from '@tessera/contracts';
 import { sql, type Transaction } from 'kysely';
@@ -18,9 +24,11 @@ import { RoundEventBusService } from './events/round-event-bus.service';
 import {
   BetAlreadySettledError,
   CashOutTooLateError,
+  GameDoesNotSupportCashOutError,
+  InvalidSelectionError,
   NoActiveRoundError,
   NoBetOnRoundError,
-  RoundNotFlyingError,
+  RoundNotRunningError,
   RoundNotFoundError,
   RoundNotOpenError,
   StakeOutOfRangeError,
@@ -29,14 +37,16 @@ import {
 type RoundRow = {
   id: string;
   nonce: number;
+  game: string;
   status: string;
   seed_hash: string;
   seed_revealed: string | null;
-  crash_point_bp: number;
+  crash_point_bp: number | null;
+  winning_pocket: number | null;
   opens_at: Date;
   locks_at: Date;
   started_at: Date | null;
-  crashed_at: Date | null;
+  resolved_at: Date | null;
 };
 
 /**
@@ -68,7 +78,7 @@ export class RoundsService {
     const row = await this.db
       .selectFrom('rounds')
       .selectAll()
-      .where('status', 'in', ['OPEN', 'LOCKED', 'FLYING'])
+      .where('status', 'in', ['OPEN', 'LOCKED', 'RUNNING'])
       .orderBy('nonce', 'desc')
       .executeTakeFirst();
 
@@ -133,6 +143,8 @@ export class RoundsService {
     roundId: string;
     stakeMinor: number;
     idempotencyKey: string;
+    /** Required for roulette, rejected for crash. */
+    selection?: RouletteSelection;
   }): Promise<BetView> {
     const minStake = this.config.get('MIN_STAKE_MINOR', { infer: true });
     const maxStake = this.config.get('MAX_STAKE_MINOR', { infer: true });
@@ -165,13 +177,21 @@ export class RoundsService {
         // below, since nothing ever reaches it concurrently.
         const round = await trx
           .selectFrom('rounds')
-          .select(['id', 'status'])
+          .select(['id', 'status', 'game'])
           .where('id', '=', input.roundId)
           .forShare()
           .executeTakeFirst();
 
         if (!round) throw new RoundNotFoundError(input.roundId);
         if (round.status !== 'OPEN') throw new RoundNotOpenError(round.status);
+
+        // The selection is priced here and stored on the bet, rather than looked
+        // up again at settlement. That way editing the odds table can never
+        // retroactively change what an already-placed bet pays.
+        const { selectionType, selectionValue, oddsBp } = this.priceSelection(
+          round.game,
+          input.selection,
+        );
 
         const walletId = await this.ledger.getWalletAccountId(input.userId, trx);
         await this.ledger.lockAndAssertSufficient(trx, walletId, stake);
@@ -183,6 +203,9 @@ export class RoundsService {
             round_id: input.roundId,
             stake_minor: stake,
             idempotency_key: input.idempotencyKey,
+            selection_type: selectionType,
+            selection_value: selectionValue,
+            odds_bp: oddsBp,
           })
           .returningAll()
           .executeTakeFirstOrThrow();
@@ -208,9 +231,11 @@ export class RoundsService {
           {
             type: 'bet.placed',
             roundId: input.roundId,
+            game: round.game,
             betId: bet.id,
             displayName,
             stakeMinor: bet.stake_minor,
+            ...(input.selection ? { selection: { ...input.selection } } : {}),
           },
           trx,
         );
@@ -219,7 +244,7 @@ export class RoundsService {
           trx,
         );
 
-        return toBetView(bet);
+        return toBetView(bet, round.game);
       });
     } catch (error) {
       // Two requests carrying the same idempotency key can both miss the replay
@@ -272,17 +297,23 @@ export class RoundsService {
 
       // Idempotent: cashing out twice returns the first result rather than
       // erroring, so a retried request converges.
-      if (bet.status === 'CASHED_OUT') return toBetView(bet);
+      if (bet.status === 'WON') return toBetView(bet);
       if (bet.status !== 'ACTIVE') throw new BetAlreadySettledError(bet.status);
 
       const round = await trx
         .selectFrom('rounds')
-        .select(['id', 'status', 'started_at', 'crash_point_bp'])
+        .select(['id', 'status', 'game', 'started_at', 'crash_point_bp'])
         .where('id', '=', bet.round_id)
         .executeTakeFirstOrThrow();
 
-      if (round.status !== 'FLYING' || !round.started_at) {
-        throw new RoundNotFlyingError(round.status);
+      // Cashing out is a crash action. A roulette bet has no such moment: it is
+      // placed, the wheel resolves, and it won or it did not.
+      if (round.game !== 'CRASH' || round.crash_point_bp === null) {
+        throw new GameDoesNotSupportCashOutError(round.game);
+      }
+
+      if (round.status !== 'RUNNING' || !round.started_at) {
+        throw new RoundNotRunningError(round.status);
       }
 
       // One clock for every instance. `clock_timestamp()` rather than `now()`,
@@ -304,8 +335,8 @@ export class RoundsService {
       const updated = await trx
         .updateTable('bets')
         .set({
-          status: 'CASHED_OUT',
-          cashout_multiplier_bp: multiplierBp,
+          status: 'WON',
+          settled_multiplier_bp: multiplierBp,
           payout_minor: payout,
           settled_at: serverNow,
         })
@@ -348,12 +379,13 @@ export class RoundsService {
 
       await this.events.publish(
         {
-          type: 'bet.cashed_out',
+          type: 'bet.won',
           roundId: bet.round_id,
+          game: round.game,
           betId: bet.id,
           displayName,
           stakeMinor: bet.stake_minor,
-          cashoutMultiplierBp: multiplierBp,
+          settledMultiplierBp: multiplierBp,
           payoutMinor: payout,
         },
         trx,
@@ -378,6 +410,49 @@ export class RoundsService {
   // ---------------------------------------------------------------------------
   // Mapping
   // ---------------------------------------------------------------------------
+
+  /**
+   * Validate and price a selection against the game being bet on.
+   *
+   * Crash has exactly one thing to bet on, so a selection is meaningless there
+   * and is rejected rather than ignored — silently dropping it would let a
+   * client believe it had backed something specific.
+   */
+  private priceSelection(
+    game: string,
+    selection?: RouletteSelection,
+  ): { selectionType: string | null; selectionValue: string | null; oddsBp: number | null } {
+    if (game === 'CRASH') {
+      if (selection) {
+        throw new InvalidSelectionError('Crash bets do not take a selection');
+      }
+      return { selectionType: null, selectionValue: null, oddsBp: null };
+    }
+
+    if (!selection) {
+      throw new InvalidSelectionError('A roulette bet must name what it is backing');
+    }
+
+    try {
+      assertValidSelection(selection);
+    } catch (error) {
+      if (error instanceof RouletteSelectionError) {
+        throw new InvalidSelectionError(error.message);
+      }
+      throw error;
+    }
+
+    return {
+      selectionType: selection.type,
+      selectionValue: selection.value === undefined ? null : String(selection.value),
+      oddsBp: oddsForSelection(selection),
+    };
+  }
+
+  /** How a selection reads in the public feed. */
+  describeBetSelection(selection: RouletteSelection): string {
+    return describeSelection(selection);
+  }
 
   /** Public feed shows who bet, never their id or balance. */
   private async displayNameOf(userId: string, executor: Executor): Promise<string> {
@@ -404,7 +479,7 @@ export class RoundsService {
   }
 
   toRoundView(row: RoundRow): RoundView {
-    const concluded = row.status === 'CRASHED' || row.status === 'SETTLED';
+    const concluded = row.status === 'RESOLVED' || row.status === 'SETTLED';
     // A voided round reveals its seed too, so voids can be audited against the
     // outcomes they discarded — but it does not report a crash point, because
     // no outcome was used.
@@ -412,16 +487,19 @@ export class RoundsService {
 
     return {
       id: row.id,
+      game: row.game as GameKind,
+      nonce: Number(row.nonce),
       status: row.status as RoundStatus,
       seedHash: row.seed_hash,
       // Withheld until the round concludes. Publishing either earlier would hand
       // a player the outcome before they bet.
       seedRevealed: revealed ? row.seed_revealed : null,
       crashPointBp: concluded ? row.crash_point_bp : null,
+      winningPocket: concluded ? row.winning_pocket : null,
       opensAt: row.opens_at.toISOString(),
       locksAt: row.locks_at.toISOString(),
       startedAt: row.started_at?.toISOString() ?? null,
-      crashedAt: row.crashed_at?.toISOString() ?? null,
+      resolvedAt: row.resolved_at?.toISOString() ?? null,
       serverTime: new Date().toISOString(),
     };
   }

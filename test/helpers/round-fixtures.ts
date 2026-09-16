@@ -37,9 +37,11 @@ export async function createRoundWithCrashPoint(
   const row = await db
     .insertInto('rounds')
     .values({
+      game: 'CRASH',
       seed,
       seed_hash: seedHash,
       crash_point_bp: crashPointBp,
+      winning_pocket: null,
       locks_at: new Date(Date.now() + (options.bettingWindowMs ?? 60_000)),
     })
     .returning(['id', 'nonce'])
@@ -48,12 +50,37 @@ export async function createRoundWithCrashPoint(
   return { id: row.id, nonce: Number(row.nonce), seed, crashPointBp };
 }
 
+/** A roulette round that will land on a known pocket. */
+export async function createRouletteRound(
+  db: Kysely<DB>,
+  winningPocket: number,
+  options: { bettingWindowMs?: number } = {},
+): Promise<{ id: string; nonce: number; seed: string; winningPocket: number }> {
+  const seed = randomBytes(32).toString('hex');
+  const seedHash = createHash('sha256').update(seed).digest('hex');
+
+  const row = await db
+    .insertInto('rounds')
+    .values({
+      game: 'ROULETTE',
+      seed,
+      seed_hash: seedHash,
+      crash_point_bp: null,
+      winning_pocket: winningPocket,
+      locks_at: new Date(Date.now() + (options.bettingWindowMs ?? 60_000)),
+    })
+    .returning(['id', 'nonce'])
+    .executeTakeFirstOrThrow();
+
+  return { id: row.id, nonce: Number(row.nonce), seed, winningPocket };
+}
+
 /** Move a round to FLYING, with `started_at` set so it reads as in flight now. */
 export async function launchRound(db: Kysely<DB>, roundId: string): Promise<void> {
   await db.updateTable('rounds').set({ status: 'LOCKED' }).where('id', '=', roundId).execute();
   await db
     .updateTable('rounds')
-    .set({ status: 'FLYING', started_at: sql<Date>`clock_timestamp()` })
+    .set({ status: 'RUNNING', started_at: sql<Date>`clock_timestamp()` })
     .where('id', '=', roundId)
     .execute();
 }

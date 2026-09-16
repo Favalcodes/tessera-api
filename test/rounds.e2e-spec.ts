@@ -63,11 +63,11 @@ describe('Rounds: lifecycle, betting and cash-out', () => {
       expect((await rounds.getRound(round.id)).status).toBe('LOCKED');
 
       await engine(app).tick(); // -> FLYING
-      expect((await rounds.getRound(round.id)).status).toBe('FLYING');
+      expect((await rounds.getRound(round.id)).status).toBe('RUNNING');
 
       await advanceToCrash(db, round.id, round.crashPointBp);
       await engine(app).tick(); // -> CRASHED
-      expect((await rounds.getRound(round.id)).status).toBe('CRASHED');
+      expect((await rounds.getRound(round.id)).status).toBe('RESOLVED');
 
       await engine(app).tick(); // -> SETTLED
       expect((await rounds.getRound(round.id)).status).toBe('SETTLED');
@@ -204,8 +204,8 @@ describe('Rounds: lifecycle, betting and cash-out', () => {
 
       const bet = await rounds.cashOut({ userId, betId: placed.id });
 
-      expect(bet.status).toBe('CASHED_OUT');
-      expect(bet.cashoutMultiplierBp).toBe(expectedBp);
+      expect(bet.status).toBe('WON');
+      expect(bet.settledMultiplierBp).toBe(expectedBp);
 
       const expectedPayout = Math.floor((10_000 * expectedBp) / BASIS_POINTS_ONE);
       expect(bet.payoutMinor).toBe(expectedPayout);
@@ -254,7 +254,7 @@ describe('Rounds: lifecycle, betting and cash-out', () => {
       // says FLYING. Trusting status here would pay for a multiplier that
       // never existed.
       await advanceToCrash(db, round.id, round.crashPointBp);
-      expect((await rounds.getRound(round.id)).status).toBe('FLYING');
+      expect((await rounds.getRound(round.id)).status).toBe('RUNNING');
 
       await expect(rounds.cashOut({ userId, betId: placed.id })).rejects.toThrow(/too late/i);
 
@@ -277,8 +277,8 @@ describe('Rounds: lifecycle, betting and cash-out', () => {
       await setElapsed(db, round.id, elapsedAtMultiplier(round.crashPointBp) - TICK_MS);
 
       const bet = await rounds.cashOut({ userId, betId: placed.id });
-      expect(bet.status).toBe('CASHED_OUT');
-      expect(bet.cashoutMultiplierBp).toBeLessThan(round.crashPointBp);
+      expect(bet.status).toBe('WON');
+      expect(bet.settledMultiplierBp).toBeLessThan(round.crashPointBp);
       await expectLedgerIntact();
     });
 

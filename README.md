@@ -41,7 +41,7 @@ write an unbalanced transaction, edit a historical posting, or drive a wallet ne
 | 4 | Hash-chain provable fairness, admin dashboard | Next |
 | 5 | Docs, demo, deploy | Not started |
 
-85 tests passing, plus HTTP load and latency harnesses.
+123 tests passing, plus HTTP load and latency harnesses.
 
 ---
 
@@ -176,7 +176,44 @@ account now gets its balances row by trigger at creation, which makes posting a 
 
 ---
 
-## The game
+## The games
+
+Two tables run concurrently, sharing one engine, one ledger, one fairness chain and one
+real-time layer. They are deliberately opposite in the way that matters: crash's difficulty
+is timing, roulette's is combinatorial settlement.
+
+| | Crash | European roulette |
+|---|---|---|
+| Bets per round | One implicit | Many, at different odds |
+| Player decision | When to cash out, under time pressure | What to back, before the spin |
+| Settlement | Races the resolver | Every bet evaluated against one pocket |
+| House edge | ~1.4%, measured over 200k rounds | Exactly 2.70%, the single zero |
+
+The lifecycle is shared and named game-neutrally — `OPEN → LOCKED → RUNNING → RESOLVED →
+SETTLED`, with `VOIDED` for a round the engine failed to resolve. A roulette round sitting
+in status `FLYING` and then `CRASHED` would have been nonsense, so the states describe the
+shape rather than one game's vocabulary. Likewise a winning bet is `WON`, not `CASHED_OUT`:
+cashing out is a crash action, and a roulette bet has no such moment.
+
+### European roulette
+
+37 pockets, single zero. Straight-up, red/black, odd/even, low/high, dozens and columns.
+
+Every bet on the table pays true odds against 36 pockets while the wheel has 37, so **every
+bet type carries exactly the same 2.70% edge** — there is no better or worse value on the
+board, which players routinely assume otherwise. Measured over 200,000 spins derived from
+real hashes, every bet type returns 97.3% of stake.
+
+Zero is handled by omission rather than special case: it is in no colour, no parity, no
+dozen and no column, so every outside bet loses on it naturally and only a straight-up bet
+on 0 wins. The rules live in `@tessera/contracts`, so a client prices a bet and predicts a
+settlement without asking the server.
+
+Odds are stored **on the bet** at placement, not looked up at settlement, so editing the
+odds table can never retroactively change what an already-placed bet pays. There is a test
+for that.
+
+### Crash
 
 One crash round at a time, driven by a leader-elected engine:
 
